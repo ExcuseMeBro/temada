@@ -29,7 +29,12 @@ against that app while it is active.
   no buttons, status, speaker headings or persistent settings panels. Settings hide
   after Start; closing Settings leaves the tray app running.
 - Independent font sizes and colors, background color/opacity, width/height, visible
-  row count, animation switch; drag the background or resize the edges. Appearance,
+  row count, animation switch. Drag ANYWHERE, including on caption text; resize all
+  four edges/four corners (8pt edges, forgiving16pt corner targets). AppKit handles
+  events before SwiftUI, so text/ScrollView cannot swallow the native window drag.
+  Resize keeps the opposite edge fixed and clamps to340×140…1800×1200pt. Scroll-wheel
+  text scrolling is unchanged; no global input monitors/Accessibility permission.
+  Appearance,
   position, dimensions, source/target and .env **path** persist in UserDefaults.
 - Consent is NOT saved; keys/captions/audio are never saved by this UI. Start is
   manual, requires consent and an explicit .env. Source/path/target changes revoke
@@ -61,6 +66,9 @@ source isolation, interim replacement, bounded history/backlog/UTF8, preference
 round-trip/clamping, JSON wire shape, and a real short pipe-frame delivery before
 EOF (writer kept open). The latter caught/fixed `FileHandle.read(upToCount:)`
 waiting to fill a 16KiB read: the reader now uses `availableData` off the UI thread.
+Additional hidden-panel tests check eight resize regions, bounds/fixed anchors,
+native drag routing over caption content, resize events and mouse-up cancellation.
+These dispatch events only to a private test panel, never another app/global mouse.
 Rust tests verify consent-before-file-read,
 JSON escaping and boundary ordering/backpressure. These do not prove actual native
 window interactions, device capture, semantic translation alignment or smoothness.

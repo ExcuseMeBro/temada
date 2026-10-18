@@ -112,7 +112,7 @@ struct NativeSettings: View {
                         sizeSlider("Window height", value: $preferences.appearance.height, range: 140...1200)
                         Stepper("Visible pairs: \(preferences.appearance.visiblePairs)", value: $preferences.appearance.visiblePairs, in: 1...12)
                         Toggle("Smooth transitions (respects Reduce Motion)", isOn: $preferences.appearance.animations)
-                        Text("Drag the overlay background to move it; resize its edges or use the sliders. Position and size are saved. Overlay contains only original text and translation.")
+                        Text("Drag anywhere on the overlay, including text. Resize any edge or corner, or use the sliders. Position and size are saved. Overlay contains only original text and translation.")
                             .font(.caption).foregroundStyle(.secondary)
                     }.padding(8)
                 }

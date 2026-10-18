@@ -68,6 +68,7 @@ import AppKit
         try! pipe.fileHandleForWriting.close()
         precondition(panel.frame.width == 820 && panel.frame.height == 330, "Empty SwiftUI content resized caption window")
         panel.close()
+        InteractionTests.run(preferences: prefs)
         print("NATIVE_SELFTEST: PASS — sentence rows, partial/order/source isolation, UTF8/bounds, persistence/clamp, short-frame IPC before EOF")
     }
 }

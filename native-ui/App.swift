@@ -18,11 +18,12 @@ import Combine
         NSApp.setActivationPolicy(.accessory)
         let args = CommandLine.arguments
         if let index = args.firstIndex(of: "--env-file"), args.indices.contains(index + 1) { preferences.appearance.envPath = args[index + 1] }
-        overlay = NSPanel(contentRect: NSRect(x: 0, y: 0, width: preferences.appearance.width, height: preferences.appearance.height), styleMask: [.borderless, .resizable, .nonactivatingPanel], backing: .buffered, defer: false)
+        overlay = CaptionPanel(contentRect: NSRect(x: 0, y: 0, width: preferences.appearance.width, height: preferences.appearance.height), styleMask: [.borderless, .resizable, .nonactivatingPanel], backing: .buffered, defer: false)
         overlay.title = "Meeting Captions Native — subtitles"
         overlay.isReleasedWhenClosed = false; overlay.level = .floating
         overlay.isOpaque = false; overlay.backgroundColor = .clear; overlay.hasShadow = true
         overlay.isMovableByWindowBackground = true; overlay.hidesOnDeactivate = false
+        overlay.acceptsMouseMovedEvents = true
         overlay.becomesKeyOnlyIfNeeded = true; overlay.minSize = NSSize(width: 340, height: 140)
         overlay.maxSize = NSSize(width: 1800, height: 1200)
         overlay.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
