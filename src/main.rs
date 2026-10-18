@@ -1,5 +1,6 @@
 mod env_key;
 mod live;
+mod worker;
 use eframe::egui;
 use serde::Deserialize;
 use std::{
@@ -49,6 +50,7 @@ enum Event {
     Status(String),
     Caption(Caption, Duration),
     Live(String, Option<String>, Option<String>, Option<String>),
+    Boundary(String, bool, bool),
 }
 struct Session {
     stop: Arc<AtomicBool>,
@@ -423,6 +425,7 @@ impl eframe::App for App {
         while let Ok(event) = self.rx.try_recv() {
             match event {
                 Event::Status(s) => self.status = s,
+                Event::Boundary(_, _, _) => {}
                 Event::Live(source, input, output, interim) => {
                     if !self.live_text.iter().any(|s| s.source == source) {
                         self.live_text.push(LiveText {
@@ -545,6 +548,10 @@ impl eframe::App for App {
     }
 }
 fn main() -> eframe::Result {
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--native-worker") {
+        std::process::exit(worker::run(&args));
+    }
     eframe::run_native(
         "Meeting Captions",
         eframe::NativeOptions {

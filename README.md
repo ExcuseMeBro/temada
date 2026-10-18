@@ -5,6 +5,68 @@ Rust/egui floating window; Swift ScreenCaptureKit/AVFoundation audio capture.
 This is a buildable prototype, NOT yet a verified realtime meeting product.
 Existing Python/local routed STT and frozen P0–P5 criteria are unchanged.
 
+## Native menu-bar UI (SwiftUI + AppKit)
+
+The new **Meeting Captions Native.app** is separate from the original app, with a
+separate bundle ID/preferences domain. It does NOT replace or stop the old app.
+Rust retains the same model/audio/TLS backend; the native UI starts it in a private
+`--native-worker` JSON-lines mode (no egui window). No WebView or downloaded models.
+
+```sh
+bash scripts/test-native.sh
+bash scripts/build-native.sh
+open "dist/Meeting Captions Native.app" --args --env-file /absolute/path/to/.env
+```
+
+Build refuses an existing destination, including an app that might be running.
+To build again, choose a **new** absolute `MC_NATIVE_APP=/path/NewName.app` rather
+than overwriting/signing an active bundle. Only the script's private staging folder
+is removed. Existing `scripts/build.sh` still builds the OLD app; do not run it
+against that app while it is active.
+
+- Menu-bar captions icon: Start/Stop, show/hide subtitles, Settings, Quit.
+- Overlay has ONLY original text with translation immediately underneath each row;
+  no buttons, status, speaker headings or persistent settings panels. Settings hide
+  after Start; closing Settings leaves the tray app running.
+- Independent font sizes and colors, background color/opacity, width/height, visible
+  row count, animation switch; drag the background or resize the edges. Appearance,
+  position, dimensions, source/target and .env **path** persist in UserDefaults.
+- Consent is NOT saved; keys/captions/audio are never saved by this UI. Start is
+  manual, requires consent and an explicit .env. Source/path/target changes revoke
+  consent; settings cannot change the capture configuration during a session.
+- Animated row insertion/autoscroll; respects macOS Reduce Motion. Old paired rows
+  are bounded in memory. Unpaired backlog/oversized frames stop visibly rather than
+  silently dropping text. Clear is disabled during capture to avoid resetting the
+  pairing indices in the middle of an untagged provider stream.
+- Original/translation deltas are split at sentence punctuation + whitespace (or
+  provider `finished` boundaries), paired FIFO **within each source**, and kept
+  under stable local IDs. Partial originals/translations grow in place. Interim
+  originals remain provisional and are not falsely attached to untagged outputs.
+  Google does not supply shared cross-stream sentence IDs: different sentence
+  counts, abbreviations, reordered translation or missing boundaries can misalign
+  rows. This is NOT guaranteed semantic forced alignment. Strict alignment would
+  require an ID-tagged per-sentence translation stage and separate latency/cost
+  validation; no silent model/provider change was made here.
+- Stop/Quit closes only the owned worker's input pipe. Rust cancels its own helpers
+  and sockets. If graceful Quit is not confirmed within 8s, quitting is cancelled;
+  there is no force-kill of an uncertain process or any other app/session.
+- Native app has a separate macOS privacy identity: grant recording permissions
+  after explicit Start. Stop capture in the original app yourself first, especially
+  in Both mode; the native app never closes another user's running application.
+
+Automated native tests use synthetic text and private temporary test preferences:
+SwiftUI/AppKit compilation, hidden AppKit panel sizing (empty captions must not
+shrink the manually sized overlay), multilingual sentence rows, partial/out-of-order text,
+source isolation, interim replacement, bounded history/backlog/UTF8, preference
+round-trip/clamping, JSON wire shape, and a real short pipe-frame delivery before
+EOF (writer kept open). The latter caught/fixed `FileHandle.read(upToCount:)`
+waiting to fill a 16KiB read: the reader now uses `availableData` off the UI thread.
+Rust tests verify consent-before-file-read,
+JSON escaping and boundary ordering/backpressure. These do not prove actual native
+window interactions, device capture, semantic translation alignment or smoothness.
+Live native UI/Meet/Zoom/TCC checks and comparable CPU/memory/frame-time measurements
+remain manual acceptance; native technology alone is not a performance guarantee.
+
 ## Default: direct Gemini Live API
 
 Select system audio (Meet, Zoom, browser/video/player/other apps), microphone,

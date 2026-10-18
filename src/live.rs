@@ -83,6 +83,17 @@ fn emit(tx: &SyncSender<Event>, source: &str, value: &Value) -> Result<(), Strin
         tx.try_send(Event::Live(source.into(), t.input, t.output, t.interim))
             .map_err(|_| "Caption UI is behind; session stopped instead of dropping text")?;
     }
+    let content = &value["serverContent"];
+    let input_done = content["inputTranscription"]["finished"]
+        .as_bool()
+        .unwrap_or(false);
+    let output_done = content["outputTranscription"]["finished"]
+        .as_bool()
+        .unwrap_or(false);
+    if input_done || output_done {
+        tx.try_send(Event::Boundary(source.into(), input_done, output_done))
+            .map_err(|_| "Caption UI is behind; boundary queue full")?;
+    }
     Ok(())
 }
 async fn source(
@@ -437,6 +448,23 @@ mod tests {
     fn tls_crypto_provider_is_available() {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let _ = rustls::ClientConfig::builder();
+    }
+    #[test]
+    fn native_boundaries_follow_text_and_are_not_dropped() {
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        let payload = serde_json::json!({"serverContent":{"inputTranscription":{"text":"Hello.","finished":true},"outputTranscription":{"text":"Salom.","finished":true}}});
+        emit(&tx, "system", &payload).unwrap();
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(Event::Live(_, Some(_), Some(_), _))
+        ));
+        assert!(
+            matches!(rx.try_recv(), Ok(Event::Boundary(source, true, true)) if source == "system")
+        );
+        let (tx, _rx) = std::sync::mpsc::sync_channel(1);
+        assert!(emit(&tx, "system", &payload)
+            .unwrap_err()
+            .contains("boundary queue full"));
     }
     #[test]
     fn pcm_wire_format() {
