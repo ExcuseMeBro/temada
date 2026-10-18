@@ -1,3 +1,4 @@
+mod env_key;
 mod live;
 use eframe::egui;
 use serde::Deserialize;
@@ -356,6 +357,7 @@ fn append_bounded(text: &mut String, delta: &str) {
 struct App {
     streaming: bool,
     api_key: String,
+    env_path: String,
     live_text: Vec<LiveText>,
     target: String,
     source: String,
@@ -371,9 +373,37 @@ struct App {
 impl Default for App {
     fn default() -> Self {
         let (tx, rx) = mpsc::sync_channel(64);
+        let args: Vec<String> = std::env::args().collect();
+        let requested = args
+            .windows(2)
+            .find(|a| a[0] == "--env-file")
+            .map(|a| a[1].clone());
+        let env_path = requested.clone().unwrap_or_else(|| {
+            std::env::current_dir()
+                .unwrap_or_default()
+                .join(".env")
+                .to_string_lossy()
+                .into_owned()
+        });
+        let (api_key, status) = if requested.is_some() {
+            match env_key::load(Path::new(&env_path)) {
+                Ok(key) => (
+                    key,
+                    "Key loaded from selected .env (hidden). Consent + Start still required."
+                        .into(),
+                ),
+                Err(error) => (String::new(), error.into()),
+            }
+        } else {
+            (
+                String::new(),
+                "Ready • Gemini Live API • enter key or load .env".into(),
+            )
+        };
         Self {
             streaming: true,
-            api_key: String::new(),
+            api_key,
+            env_path,
             live_text: vec![],
             target: "Uzbek".into(),
             source: "system".into(),
@@ -384,7 +414,7 @@ impl Default for App {
             rx,
             tx,
             rows: vec![],
-            status: "Ready • Gemini Live API • enter API key (memory only)".into(),
+            status,
         }
     }
 }
@@ -459,7 +489,17 @@ impl eframe::App for App {
                     egui::ComboBox::from_label("Audio").selected_text(&self.source).show_ui(ui, |ui| { for s in ["system", "microphone", "both"] { if self.streaming || s != "both" { ui.selectable_value(&mut self.source, s.into(), s); } } });
                 });
                 if self.streaming {
-                    ui.add(egui::TextEdit::singleline(&mut self.api_key).password(true).hint_text("Gemini API key — session memory only, never saved"));
+                    ui.horizontal(|ui| {
+                        if ui.add(egui::TextEdit::singleline(&mut self.env_path).hint_text(".env file path")).changed() { self.api_key.clear(); self.consent = false; }
+                        if ui.button("Load .env").clicked() {
+                            self.api_key.clear(); self.consent = false;
+                            match env_key::load(Path::new(&self.env_path)) {
+                                Ok(key) => { self.api_key = key; self.status = "Key loaded from .env (hidden). Consent + Start still required.".into(); }
+                                Err(error) => self.status = error.into(),
+                            }
+                        }
+                    });
+                    if ui.add(egui::TextEdit::singleline(&mut self.api_key).password(true).hint_text("Gemini API key — memory only; never written by app")).changed() { self.consent = false; }
                     ui.small(format!("Preview model: {} • auto-detect speech • target: {}", live::MODEL, self.target));
                     ui.small("Cloud API is separate from subscription. Free tier/model access not guaranteed; enabled billing may charge.");
                     ui.small("Live Translate generates AUDIO + text. Audio is discarded but can still be billed. Both = two API sessions.");

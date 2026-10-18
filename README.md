@@ -37,10 +37,22 @@ not enable billing, silently switch models/providers, or retry/reconnect. Check
 Google pricing and use a billing-disabled project if you require no paid use.
 The 10-minute safety stop is a duration bound, NOT a monetary budget guarantee.
 
-Before Start, enter the key in the masked field and explicitly consent to cloud
-processing/possible charges. The app holds the key only in process memory (not
-persisted to disk, exported to child processes, or logged). Clear/close the app
-when done; no claim of protection from OS swap/crash dumps or compromised device.
+Before Start, enter the key in the masked field or select an existing `.env` path
+and click **Load .env**. Only `GEMINI_API_KEY` / `GOOGLE_API_KEY` are accepted;
+conflicting aliases are rejected. File parsing never executes a shell, exports
+variables, rewrites the file, or logs contents/errors containing secret values.
+Files are bounded to 64KiB. To explicitly preload a selected file at launch:
+
+```sh
+open "dist/Meeting Captions.app" --args --env-file /absolute/path/to/.env
+```
+
+Loading a key is NOT consent to cloud processing: check the separate cost/consent
+box and press Start. Changing key/path clears consent; failed loading clears the
+previous key to avoid accidental use of another account. The app never writes the
+key to disk, exports it to child processes, or logs it. Your existing `.env` is
+still plaintext on disk; keep it private and out of Git. Close the app when done;
+no claim of protection from OS swap/crash dumps or compromised device.
 The key is sent only in the TLS handshake header, not URL/query or user logs.
 Obtain consent from meeting participants. See Google's data retention policies,
 including free-tier data handling, before sending confidential speech.
