@@ -1,119 +1,116 @@
-# Meeting Captions — experimental macOS app (BRAIN-1)
+# Meeting Captions — macOS Rust streaming prototype (BRAIN-1)
 
-Rust/egui floating window + a small Swift ScreenCaptureKit/AVFoundation helper.
-Written original transcript and translation for English, Russian and Uzbek.
-This is a **buildable prototype, not a verified ultra-low-latency meeting product**.
-The existing Python/local routed STT implementation and its acceptance criteria are unchanged.
+Rust/egui floating window; Swift ScreenCaptureKit/AVFoundation audio capture.
+**No downloaded models required.** Original transcript + EN/RU/UZ translation.
+This is a buildable prototype, NOT yet a verified realtime meeting product.
+Existing Python/local routed STT and frozen P0–P5 criteria are unchanged.
 
-## Subscription path, not Jot API billing
+## Default: direct Gemini Live API
 
-Jot explicitly requires a Gemini API key: https://github.com/google-gemini/jot-gemini-transcribe-macOS
+Select system audio (Meet, Zoom, browser/video/player/other apps), microphone,
+or **both**. Both opens two independent capture helpers and two API sessions;
+source labels are retained, not diarized/mixed. Use headphones to reduce echo or
+speech duplicated through the microphone. No acoustic echo cancellation yet.
+System capture uses the first display and includes other apps' audio, not only
+Meet/Zoom. No screen images are read/stored by this app. Microphone device selection
+uses the current macOS default; device switching/revocation requires a restart.
 
-This increment instead invokes the official Gemini CLI with a cached Google login.
-Google documents AI Pro/Ultra accounts and cached authentication in headless mode:
-https://github.com/google-gemini/gemini-cli/blob/main/docs/get-started/authentication.mdx
-Audio is attached directly using `@file.wav`, not returned through a tool call:
-https://github.com/google-gemini/gemini-cli/blob/main/docs/tools/file-system.md
+The helper resamples to mono signed little-endian PCM16 at 16kHz, emits frames of
+at most 100ms, and Rust sends them continuously over a TLS WebSocket. There are no
+four-second WAV/CLI calls in this path. Native buffers can be shorter than 100ms.
+Google returns original/translated text deltas which update the floating window.
+Interim input events are displayed if the service sends them; actual provider
+partial/segment behavior and end-to-end latency remain unverified. Rolling source
+and translation text are not guaranteed sentence-aligned; each keeps a bounded
+recent history. Generated audio is discarded (never played).
 
-Optional Codex translation uses the existing ChatGPT login, **for text only**.
-Codex is NOT an audio transcription backend:
-https://github.com/openai/codex
+Model: `gemini-3.5-live-translate-preview`, official documentation lists English,
+Russian and Uzbek (`en`, `ru`, `uz`). Availability can vary by account and region.
+This feature-specific selection does not alter any existing CLI/global model.
 
-The app does not implement browser automation, reuse cookies, extract tokens,
-change global CLI settings, or silently fall back to paid APIs. Google OAuth is
-selected/enforced in the temporary workspace; API-key environment variables are
-removed from child commands. Codex is pinned to ChatGPT login. The CLI's existing
-model selection remains unchanged. Older CLI versions may reject the protective
-flags/settings; that is a visible error, not permission to bypass them.
+**Important billing/privacy:** this is a Gemini **API key**, NOT a Gemini/ChatGPT
+subscription. Free tier and access to this preview model are NOT guaranteed.
+Live Translate requires AUDIO output; even though we discard audio, Google may
+bill generated audio as well as audio input. Both mode can incur two sessions'
+usage. The app cannot verify your billing tier, credits or dollar spend. It does
+not enable billing, silently switch models/providers, or retry/reconnect. Check
+Google pricing and use a billing-disabled project if you require no paid use.
+The 10-minute safety stop is a duration bound, NOT a monetary budget guarantee.
 
-**Unverified:** actual Gemini subscription audio capability, account quotas and
-end-to-end latency on this machine. Gemini CLI was absent at implementation time.
-Codex `login status` reported `Logged in using ChatGPT`. That is auth metadata,
-not proof of successful translation. No account requests or real meeting audio
-were sent during implementation. Subscription authentication does not guarantee
-all audio/model features are available. If Google rejects audio, this backend is
-blocked; an explicitly approved API or the existing local STT backend is needed.
+Before Start, enter the key in the masked field and explicitly consent to cloud
+processing/possible charges. The app holds the key only in process memory (not
+persisted to disk, exported to child processes, or logged). Clear/close the app
+when done; no claim of protection from OS swap/crash dumps or compromised device.
+The key is sent only in the TLS handshake header, not URL/query or user logs.
+Obtain consent from meeting participants. See Google's data retention policies,
+including free-tier data handling, before sending confidential speech.
 
-## Build and launch
+## Build / launch
 
-Requires macOS 14+, Apple command-line developer tools, Rust/Cargo, and the official
-CLIs available on PATH. Install/sign in yourself in Terminal (the app never enters
-credentials or accepts consent on your behalf):
+macOS 14+, Apple command-line developer tools, Rust/Cargo. No CLI needed for Live.
 
 ```sh
-# If absent; installs official CLI globally, a user-controlled setup step:
-npm install -g @google/gemini-cli
-gemini                     # choose Sign in with Google; finish browser consent
-codex login                # only if using ChatGPT translation
-```
-
-From `macos-live/`:
-
-```sh
+cd macos-live
 bash scripts/test.sh
 bash scripts/build.sh
-"$PWD/dist/Meeting Captions.app/Contents/MacOS/meeting-captions"
+open "dist/Meeting Captions.app"
 ```
 
-Launch from the signed bundle, **from Terminal**, so it inherits your CLI PATH.
-Build is local/ad-hoc signed, not notarized, installed, published or uploaded.
-Select target language and either `system` (Meet/Zoom/browser playback) or
-`microphone`. Select optional Codex translation, explicitly consent to cloud
-processing, then Start. Grant the macOS audio/microphone permission when prompted.
-System capture uses the first display's audio filter and saves no video frames.
-This prototype does not detect Meet/Zoom processes or capture only one app: system
-mode can include OTHER apps' audio. Obtain meeting participants' consent.
+Local/ad-hoc signed; not notarized, installed, uploaded or published. Build outputs
+are isolated inside this worktree. Launch, choose language/source, enter API key,
+check consent, Start, then grant Screen & System Audio Recording / Microphone in
+macOS Privacy settings. Real key/permission tests require the user's involvement.
+No key/device/cloud requests are made by automated tests.
 
-## Latency, buffering and stop behavior
+## Streaming limits / cancellation
 
-- Four-second audio chunks: latency is **at least chunk collection + CLI startup +
-  network/inference**, plus another CLI call if Codex translation is enabled.
-- Gemini transcribes and translates in a single request; Codex mode replaces its
-  translation with a second text request. No unmeasured speed claim.
-- One provider request in flight. Four WAV files maximum; capture exits visibly
-  on overload. Queued chunks older than 12 seconds stop the session rather than
-  silently presenting increasingly stale captions. Provider deadline: 40 seconds.
-- Stop/close cancels this app's helper and owned provider process group, waits for
-  worker cleanup, deletes temporary audio. It never stops another Pi/CLI/app.
-- **Stop discards unfinished (<4s), in-flight and queued chunks.** Not a lossless
-  recorder or meeting archive. The UI keeps only the latest 100 caption pairs.
-- No hot word-boundary overlap/VAD, no partial live tokens, no dual-source mixing,
-  no diarization/export/reconnect yet. Permission revocation/provider errors are
-  visible, not retried silently. Quiet/silent audio still consumes provider quota.
+- At most two live sessions. 12s connection/setup timeout; 2s sends; 20s missing
+  capture watchdog; 60s server-response watchdog with WebSocket heartbeats.
+- 10-minute safety session cap; restart explicitly. Provider time/session limits,
+  quota, permission/network errors stop visibly. No billable automatic reconnect.
+- UI channel is bounded; slow consumers stop rather than silently drop captions.
+  Terminal errors are separately retained even if the UI queue is full.
+- Stop/close ends only this app's helpers and sockets, waits for cleanup. Neither
+  another app/session nor a user's Pi/CLI process is stopped. Queued/in-flight audio
+  and unfinished transcripts can be discarded; this is not a lossless recorder.
+- Live audio is never written to WAV/disk by the helper; captions remain in memory.
+  Quiet audio can still consume API quota. Device/meeting quality remains untested.
 
-## Privacy and security boundary
+## Optional legacy CLI mode (experimental, NOT realtime)
 
-Start requires explicit consent. Audio goes to Google; optional original transcript
-goes to OpenAI. Raw WAVs live inside a private OS temporary directory and are removed
-after processing/session cleanup. A hard crash may leave the private temp directory
-behind; no crash-recovery deletion of unknown directories is performed. Caption
-text is only held by this app in memory, not logged. Provider stderr is not echoed
-because it can contain sensitive data; errors show provider/exit status and next
-steps. CLI output is bounded, held in anonymous temporary files and discarded.
+Uncheck Realtime to retain the earlier four-second chunk prototype. It requires
+`gemini` CLI on PATH with Google sign-in; optional `codex` with ChatGPT login does
+text translation only. Launch from Terminal to inherit CLI PATH. That path uses
+private temporary WAV files, bounded four-file queue, 12s backlog/40s provider
+limits and discards pending/incomplete chunks on Stop. Private temporary WAVs are
+cleaned after processing/session; a hard crash can leave the private directory.
+No dual-source mode there. Actual subscription audio support remains unverified;
+Gemini CLI was absent at implementation. AGY's inspected public CLI exposed IDE
+commands, not a documented headless audio streaming API; no private auth/tokens
+were extracted. This path never falls back to API billing.
 
-Gemini uses no extensions, an empty built-in/MCP allowlist, a deny-tools policy and
-plan mode. The temporary directory alone is trusted via `--skip-trust`, not a user's
-repository. Codex uses read-only sandboxing, ephemeral execution, shell-tool disable
-and an empty MCP configuration override. Audio/transcripts are marked untrusted data.
-These controls need integration verification against the installed CLI versions;
-this is **not a claim of an independently audited agent sandbox**. Managed admin
-policies/user CLI plugins may affect behavior. CLIs still use their own account
-configuration and may cache session/audio/transcript data outside our directory;
-review their retention and privacy policies. No promise of fully local processing.
+The legacy runner enforces OAuth, removes API-key env variables, disables Gemini
+extensions/built-in/MCP tools with deny policy/plan mode, and uses Codex read-only,
+ephemeral mode with shell/MCP disabled. These are unverified integration controls,
+not an audited sandbox. CLIs can retain their own session data; consult their
+privacy settings. Direct Live Translate executes no tools or transcript commands.
 
-## Evidence / remaining acceptance
+## Evidence / open acceptance
 
-Automated checks use synthetic PCM only (no devices, cloud calls or permissions):
-Rust parser/multilingual/size/failure/cancellation/timeout tests; Clippy; formatting;
-Swift compile; 4-second WAV round-trip; four-file overload; plist/shell validation;
-release bundle build/ad-hoc signature checks.
+Synthetic/no-device tests cover Rust protocol/payload/error/backpressure handling,
+UTF-8 bounds, cancellation/timeouts, CLI failures; Swift compilation, synthetic
+WAV round-trip/four-file overload, 48k stereo → mono16k PCM16 streaming with no audio
+files; Clippy, fmt, shell/plist checks; release/ad-hoc signature checks.
 
-Still required before product acceptance: real signed-in Gemini audio probe,
-EN↔UZ/RU↔UZ quality on consented mixed-language audio, timing from spoken word to
-rendered caption, actual Meet and Zoom playback, microphone and screen-audio TCC
-behavior, permission revocation, Stop during capture/request, long session and
-quota/backlog handling. Subscription CLI mode may fail the ultra-fast requirement;
-a persistent realtime API connection or warm local backend is then necessary.
+Still blocked: authenticated real Live handshake/model/free-tier access, actual
+word-to-screen latency, EN↔UZ/RU↔UZ mixed-language quality, real Meet/Zoom/video and
+microphone/both tests, TCC/revocation, network/stop behavior on live devices, long
+sessions, quota/billing validation. Automated mocks are not those acceptance gates.
+Existing P0–P5 remain open. No Git remote exists; no dev/main/remote delivery claimed.
 
-Existing project P0–P5 acceptance (including real-audio benchmarks) remains open.
-No remote is configured; no dev/main integration or remote delivery is claimed.
+References:
+- https://ai.google.dev/gemini-api/docs/live-api/live-translate
+- https://ai.google.dev/gemini-api/docs/live-api/live-transcribe
+- https://ai.google.dev/gemini-api/docs/live-guide
+- https://ai.google.dev/gemini-api/docs/pricing
+- https://github.com/google-gemini/jot-gemini-transcribe-macOS

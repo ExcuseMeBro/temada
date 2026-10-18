@@ -1,3 +1,4 @@
+mod live;
 use eframe::egui;
 use serde::Deserialize;
 use std::{
@@ -41,15 +42,18 @@ struct Config {
     source: String,
     codex: bool,
     helper: PathBuf,
+    live: Option<live::Config>,
 }
 enum Event {
     Status(String),
     Caption(Caption, Duration),
+    Live(String, Option<String>, Option<String>, Option<String>),
 }
 struct Session {
     stop: Arc<AtomicBool>,
     capture: Arc<Mutex<Option<Child>>>,
     worker: Option<thread::JoinHandle<()>>,
+    outcome: Arc<Mutex<Option<String>>>,
 }
 impl Session {
     fn stop(&self) {
@@ -198,11 +202,16 @@ fn start(config: Config, tx: SyncSender<Event>) -> Session {
         stop: Arc::new(AtomicBool::new(false)),
         capture: Arc::new(Mutex::new(None)),
         worker: None,
+        outcome: Arc::new(Mutex::new(None)),
     };
     let stop = session.stop.clone();
     let capture = session.capture.clone();
+    let outcome = session.outcome.clone();
     session.worker = Some(thread::spawn(move || {
         let result = (|| -> Result<(), String> {
+            if let Some(live) = config.live.clone() {
+                return live::run(live, stop.clone(), tx.clone());
+            }
             let dir = tempfile::Builder::new()
                 .prefix("meeting-captions-")
                 .tempdir()
@@ -317,12 +326,37 @@ fn start(config: Config, tx: SyncSender<Event>) -> Session {
             }
         }
         if let Err(e) = result {
+            if let Ok(mut state) = outcome.lock() {
+                *state = Some(e.clone());
+            }
             let _ = tx.try_send(Event::Status(e));
         }
     }));
     session
 }
+#[derive(Default)]
+struct LiveText {
+    source: String,
+    input: String,
+    output: String,
+    interim: String,
+}
+fn append_bounded(text: &mut String, delta: &str) {
+    text.push_str(delta);
+    if text.chars().count() > 16000 {
+        let cut = text
+            .char_indices()
+            .rev()
+            .nth(7999)
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+        text.drain(..cut);
+    }
+}
 struct App {
+    streaming: bool,
+    api_key: String,
+    live_text: Vec<LiveText>,
     target: String,
     source: String,
     codex: bool,
@@ -338,6 +372,9 @@ impl Default for App {
     fn default() -> Self {
         let (tx, rx) = mpsc::sync_channel(64);
         Self {
+            streaming: true,
+            api_key: String::new(),
+            live_text: vec![],
             target: "Uzbek".into(),
             source: "system".into(),
             codex: false,
@@ -347,7 +384,7 @@ impl Default for App {
             rx,
             tx,
             rows: vec![],
-            status: "Ready • install/login Gemini CLI before starting".into(),
+            status: "Ready • Gemini Live API • enter API key (memory only)".into(),
         }
     }
 }
@@ -356,6 +393,29 @@ impl eframe::App for App {
         while let Ok(event) = self.rx.try_recv() {
             match event {
                 Event::Status(s) => self.status = s,
+                Event::Live(source, input, output, interim) => {
+                    if !self.live_text.iter().any(|s| s.source == source) {
+                        self.live_text.push(LiveText {
+                            source: source.clone(),
+                            ..Default::default()
+                        });
+                    }
+                    let s = self
+                        .live_text
+                        .iter_mut()
+                        .find(|s| s.source == source)
+                        .unwrap();
+                    if let Some(input) = input {
+                        append_bounded(&mut s.input, &input);
+                        s.interim.clear();
+                    }
+                    if let Some(output) = output {
+                        append_bounded(&mut s.output, &output);
+                    }
+                    if let Some(interim) = interim {
+                        s.interim = interim;
+                    }
+                }
                 Event::Caption(c, elapsed) => {
                     if self.rows.len() >= 100 {
                         self.rows.remove(0);
@@ -377,33 +437,63 @@ impl eframe::App for App {
             {
                 self.status = "Stopped • unfinished and queued audio discarded".into();
             }
+            if let Some(error) = self
+                .session
+                .as_ref()
+                .and_then(|s| s.outcome.lock().ok().and_then(|v| v.clone()))
+            {
+                self.status = error;
+            }
             self.session = None;
         }
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("Meeting Captions");
             ui.label("EN · RU · UZ  /  Original + translation");
             ui.add_enabled_ui(self.session.is_none(), |ui| {
+                if ui.checkbox(&mut self.streaming, "Realtime Gemini Live API (no downloaded models)").changed() {
+                    self.consent = false;
+                    if !self.streaming && self.source == "both" { self.source = "system".into(); }
+                }
                 ui.horizontal(|ui| {
                     egui::ComboBox::from_label("Translate to").selected_text(&self.target).show_ui(ui, |ui| { for t in ["Uzbek", "English", "Russian"] { ui.selectable_value(&mut self.target, t.into(), t); } });
-                    egui::ComboBox::from_label("Audio").selected_text(&self.source).show_ui(ui, |ui| { for s in ["system", "microphone"] { ui.selectable_value(&mut self.source, s.into(), s); } });
+                    egui::ComboBox::from_label("Audio").selected_text(&self.source).show_ui(ui, |ui| { for s in ["system", "microphone", "both"] { if self.streaming || s != "both" { ui.selectable_value(&mut self.source, s.into(), s); } } });
                 });
-                ui.checkbox(&mut self.codex, "Translate with Codex / ChatGPT login (Gemini still transcribes audio)");
-                ui.checkbox(&mut self.consent, "I agree to send captured audio to Google; optional transcript to OpenAI.");
-                ui.small("CLI providers may retain session data locally and have subscription quotas. No API fallback.");
+                if self.streaming {
+                    ui.add(egui::TextEdit::singleline(&mut self.api_key).password(true).hint_text("Gemini API key — session memory only, never saved"));
+                    ui.small(format!("Preview model: {} • auto-detect speech • target: {}", live::MODEL, self.target));
+                    ui.small("Cloud API is separate from subscription. Free tier/model access not guaranteed; enabled billing may charge.");
+                    ui.small("Live Translate generates AUDIO + text. Audio is discarded but can still be billed. Both = two API sessions.");
+                    ui.small("10-minute safety stop; no auto-reconnect. Use headphones in Both mode to reduce duplicated speech/echo.");
+                    ui.checkbox(&mut self.consent, "I agree to send audio to Google and understand possible API charges.");
+                } else {
+                    ui.checkbox(&mut self.codex, "Translate with Codex / ChatGPT login (Gemini still transcribes audio)");
+                    ui.checkbox(&mut self.consent, "I agree to send captured audio to Google; optional transcript to OpenAI.");
+                    ui.small("Experimental 4s CLI chunks, NOT realtime. No API fallback. Subscription quotas apply.");
+                }
             });
             ui.horizontal(|ui| {
                 if self.session.is_none() {
-                    if ui.add_enabled(self.consent, egui::Button::new("Start captions")).clicked() {
+                    if ui.add_enabled(self.consent && (!self.streaming || !self.api_key.trim().is_empty()), egui::Button::new("Start captions")).clicked() {
                         let helper = std::env::current_exe().unwrap_or_default().with_file_name("capture-helper");
-                        self.session = Some(start(Config { target: self.target.clone(), source: self.source.clone(), codex: self.codex, helper }, self.tx.clone()));
+                        let target = match self.target.as_str() { "Russian" => "ru", "English" => "en", _ => "uz" };
+                        let live = self.streaming.then(|| live::Config { key: self.api_key.trim().into(), target: target.into(), source: self.source.clone(), helper: helper.clone() });
+                        self.live_text.clear();
+                        self.session = Some(start(Config { target: self.target.clone(), source: self.source.clone(), codex: self.codex, helper, live }, self.tx.clone()));
                         self.status = "Starting capture…".into();
                     }
                 } else if ui.button("Stop").clicked() { if let Some(s) = &self.session { s.stop(); } self.status = "Stopping…".into(); }
                 if ui.checkbox(&mut self.floating, "Always on top").changed() { ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(if self.floating { egui::WindowLevel::AlwaysOnTop } else { egui::WindowLevel::Normal })); }
-                if ui.button("Clear").clicked() { self.rows.clear(); }
+                if ui.button("Clear").clicked() { self.rows.clear(); self.live_text.clear(); }
             });
             ui.label(&self.status); ui.separator();
             egui::ScrollArea::vertical().stick_to_bottom(true).show(ui, |ui| {
+                for s in &self.live_text {
+                    ui.strong(format!("{} • rolling live text (not sentence-aligned)", s.source));
+                    ui.label(egui::RichText::new(&s.input).size(18.));
+                    if !s.interim.is_empty() { ui.label(egui::RichText::new(&s.interim).italics().weak()); }
+                    ui.label(egui::RichText::new(&s.output).size(23.).color(egui::Color32::from_rgb(115, 220, 190)));
+                    ui.separator();
+                }
                 for (c, elapsed) in &self.rows {
                     ui.label(egui::RichText::new(&c.original).size(18.));
                     ui.label(egui::RichText::new(&c.translation).size(23.).color(egui::Color32::from_rgb(115, 220, 190)));
