@@ -19,7 +19,7 @@ use tokio::{
     time::{interval, timeout, Instant, MissedTickBehavior},
 };
 use tokio_tungstenite::{
-    connect_async,
+    client_async_tls_with_config,
     tungstenite::{client::IntoClientRequest, Message},
 };
 
@@ -33,7 +33,7 @@ pub struct Config {
     pub helper: PathBuf,
 }
 fn setup(target: &str) -> Value {
-    json!({"setup": {"model": format!("models/{MODEL}"), "generationConfig": {"responseModalities": ["AUDIO"], "translationConfig": {"targetLanguageCode": target, "echoTargetLanguage": true}, "inputAudioTranscription": {}, "outputAudioTranscription": {}}}})
+    json!({"setup": {"model": format!("models/{MODEL}"), "generationConfig": {"responseModalities": ["AUDIO"], "translationConfig": {"targetLanguageCode": target, "echoTargetLanguage": true}}, "inputAudioTranscription": {}, "outputAudioTranscription": {}}})
 }
 fn audio(line: &str) -> Result<Value, String> {
     let b64 = line
@@ -97,14 +97,15 @@ async fn source(
     }
     source_at(config, name, stop, failed, tx, ENDPOINT).await
 }
-async fn source_at(
+async fn connect_setup(
     config: &Config,
-    name: &str,
-    stop: &AtomicBool,
-    failed: &AtomicBool,
-    tx: &SyncSender<Event>,
     endpoint: &str,
-) -> Result<(), String> {
+) -> Result<
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+    String,
+> {
+    // Explicit provider: TLS-only failures are invisible to localhost ws:// mocks.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let mut request = endpoint
         .into_client_request()
         .map_err(|_| "Invalid Live endpoint")?;
@@ -116,33 +117,86 @@ async fn source_at(
             .map_err(|_| "Invalid API key characters")?,
     );
     // Never include connection errors: they may echo the request and its key.
-    let connect = async {
-        let (mut ws, _) = connect_async(request).await.map_err(|_| {
-            "Live connection failed. Check network, API key, quota and model access"
-        })?;
-        ws.send(Message::Text(setup(&config.target).to_string().into()))
-            .await
-            .map_err(|_| "Cannot send Live setup")?;
-        loop {
-            match ws.next().await {
-                Some(Ok(Message::Text(s))) => {
-                    let v: Value =
-                        serde_json::from_str(&s).map_err(|_| "Invalid Live setup response")?;
-                    text(&v)?;
-                    if v.get("setupComplete").is_some() {
-                        break;
-                    }
-                }
-                Some(Ok(Message::Ping(p))) => ws
-                    .send(Message::Pong(p))
-                    .await
-                    .map_err(|_| "Live handshake failed")?,
-                Some(Ok(_)) => {}
-                _ => return Err("Live connection closed before setup".into()),
-            }
+    let host = request.uri().host().ok_or("Live host missing")?;
+    let port = request
+        .uri()
+        .port_u16()
+        .unwrap_or(if request.uri().scheme_str() == Some("wss") {
+            443
+        } else {
+            80
+        });
+    let mut addresses: Vec<_> = timeout(
+        Duration::from_secs(3),
+        tokio::net::lookup_host((host, port)),
+    )
+    .await
+    .map_err(|_| "Live DNS timed out")?
+    .map_err(|_| "Live DNS lookup failed")?
+    .collect();
+    // Some macOS networks advertise IPv6 without a working IPv6 route. Bound each
+    // address attempt, prefer IPv4 when available, but retain IPv6-only support.
+    addresses.sort_by_key(|address| address.is_ipv6());
+    #[cfg(test)]
+    eprintln!("LIVE_PHASE: DNS resolved");
+    let mut stream = None;
+    for address in addresses.into_iter().take(4) {
+        if let Ok(Ok(socket)) = timeout(
+            Duration::from_secs(2),
+            tokio::net::TcpStream::connect(address),
+        )
+        .await
+        {
+            stream = Some(socket);
+            break;
         }
-        Ok::<_, String>(ws)
-    };
+    }
+    let stream = stream.ok_or("Live TCP connection failed (bounded address attempts)")?;
+    #[cfg(test)]
+    eprintln!("LIVE_PHASE: TCP connected");
+    let (mut ws, _) = timeout(
+        Duration::from_secs(5),
+        client_async_tls_with_config(request, stream, None, None),
+    )
+    .await
+    .map_err(|_| "Live TLS/WebSocket handshake timed out")?
+    .map_err(|_| "Live TLS/WebSocket handshake failed. Check network and API access")?;
+    #[cfg(test)]
+    eprintln!("LIVE_PHASE: TLS/WebSocket connected");
+    ws.send(Message::Text(setup(&config.target).to_string().into()))
+        .await
+        .map_err(|_| "Cannot send Live setup")?;
+    #[cfg(test)]
+    eprintln!("LIVE_PHASE: setup sent");
+    loop {
+        match ws.next().await {
+            Some(Ok(frame @ (Message::Text(_) | Message::Binary(_)))) => {
+                let v: Value = serde_json::from_slice(&frame.into_data())
+                    .map_err(|_| "Invalid Live setup response")?;
+                text(&v)?;
+                if v.get("setupComplete").is_some() {
+                    break;
+                }
+            }
+            Some(Ok(Message::Ping(p))) => ws
+                .send(Message::Pong(p))
+                .await
+                .map_err(|_| "Live handshake failed")?,
+            Some(Ok(_)) => {}
+            _ => return Err("Live connection closed before setup".into()),
+        }
+    }
+    Ok(ws)
+}
+async fn source_at(
+    config: &Config,
+    name: &str,
+    stop: &AtomicBool,
+    failed: &AtomicBool,
+    tx: &SyncSender<Event>,
+    endpoint: &str,
+) -> Result<(), String> {
+    let connect = connect_setup(config, endpoint);
     let mut check = interval(Duration::from_millis(50));
     let mut ws = tokio::select! {
         result = timeout(Duration::from_secs(12), connect) => result.map_err(|_| "Live setup timed out (12s)")??,
@@ -190,9 +244,10 @@ async fn source_at(
                 frame = ws.next() => {
                     last_server = Instant::now();
                     match frame {
-                        Some(Ok(Message::Text(s))) => {
-                            if s.len() > 2_000_000 { return Err("Live response exceeds size limit".into()); }
-                            let value: Value = serde_json::from_str(&s).map_err(|_| "Invalid Live response")?;
+                        Some(Ok(frame @ (Message::Text(_) | Message::Binary(_)))) => {
+                            let data = frame.into_data();
+                            if data.len() > 2_000_000 { return Err("Live response exceeds size limit".into()); }
+                            let value: Value = serde_json::from_slice(&data).map_err(|_| "Invalid Live response")?;
                             emit(tx, name, &value)?;
                         }
                         Some(Ok(Message::Ping(p))) => {
@@ -252,12 +307,14 @@ mod tests {
             v["setup"]["generationConfig"]["translationConfig"]["targetLanguageCode"],
             "uz"
         );
+        assert!(v["setup"].get("inputAudioTranscription").is_some());
+        assert!(v["setup"].get("outputAudioTranscription").is_some());
         assert!(v["setup"]["generationConfig"]
             .get("inputAudioTranscription")
-            .is_some());
+            .is_none());
         assert!(v["setup"]["generationConfig"]
             .get("outputAudioTranscription")
-            .is_some());
+            .is_none());
         assert!(v.to_string().contains("AUDIO"));
     }
     // tungstenite's required handshake callback returns its fixed (large) ErrorResponse.
@@ -305,8 +362,8 @@ mod tests {
                 serde_json::from_str::<Value>(&setup_frame).unwrap(),
                 setup("uz")
             );
-            ws.send(Message::Text(
-                json!({"setupComplete":{}}).to_string().into(),
+            ws.send(Message::Binary(
+                json!({"setupComplete":{}}).to_string().into_bytes().into(),
             ))
             .await
             .unwrap();
@@ -316,7 +373,7 @@ mod tests {
                     Message::Text(s) => {
                         let v: Value = serde_json::from_str(&s).unwrap();
                         assert_eq!(v["realtimeInput"]["audio"]["data"], "AAABAA==");
-                        ws.send(Message::Text(json!({"serverContent":{"inputTranscription":{"text":"Hello"},"outputTranscription":{"text":"Salom"}}}).to_string().into())).await.unwrap();
+                        ws.send(Message::Binary(json!({"serverContent":{"inputTranscription":{"text":"Hello"},"outputTranscription":{"text":"Salom"}}}).to_string().into_bytes().into())).await.unwrap();
                     }
                     Message::Close(_) => break,
                     _ => {}
@@ -356,6 +413,30 @@ mod tests {
             -1,
             "owned helper still running"
         );
+    }
+    #[tokio::test]
+    #[ignore = "Real Google API setup only: explicit consent and MEETING_CAPTIONS_TEST_ENV required"]
+    async fn cloud_setup_only_no_audio() {
+        let path = std::env::var("MEETING_CAPTIONS_TEST_ENV").expect("Explicit .env path required");
+        let key = crate::env_key::load(std::path::Path::new(&path))
+            .expect("Cannot load key (contents hidden)");
+        let config = Config {
+            key,
+            target: "uz".into(),
+            source: "system".into(),
+            helper: PathBuf::new(),
+        };
+        let mut ws = timeout(Duration::from_secs(12), connect_setup(&config, ENDPOINT))
+            .await
+            .expect("Setup timeout")
+            .expect("Live setup failed (details hidden)");
+        let _ = timeout(Duration::from_secs(1), ws.close(None)).await;
+        // Never spawn capture, send audio, play generated audio, or change billing.
+    }
+    #[test]
+    fn tls_crypto_provider_is_available() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let _ = rustls::ClientConfig::builder();
     }
     #[test]
     fn pcm_wire_format() {

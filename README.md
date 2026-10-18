@@ -72,7 +72,10 @@ Local/ad-hoc signed; not notarized, installed, uploaded or published. Build outp
 are isolated inside this worktree. Launch, choose language/source, enter API key,
 check consent, Start, then grant Screen & System Audio Recording / Microphone in
 macOS Privacy settings. Real key/permission tests require the user's involvement.
-No key/device/cloud requests are made by automated tests.
+The default automated suite uses fixtures only; it never accesses a real key,
+device or cloud. The separately ignored `cloud_setup_only_no_audio` test requires
+explicit consent and `MEETING_CAPTIONS_TEST_ENV=/absolute/path/to/.env`; it tests
+TLS + authenticated setup only, sends no audio, and never starts capture.
 
 ## Streaming limits / cancellation
 
@@ -114,10 +117,16 @@ UTF-8 bounds, cancellation/timeouts, CLI failures; Swift compilation, synthetic
 WAV round-trip/four-file overload, 48k stereo → mono16k PCM16 streaming with no audio
 files; Clippy, fmt, shell/plist checks; release/ad-hoc signature checks.
 
-Still blocked: authenticated real Live handshake/model/free-tier access, actual
+With user consent, an authenticated Rust TLS/WebSocket setup-only probe passed
+using the configured preview model and Uzbek target. No audio was sent. The probe
+found/fixed transcript flags incorrectly nested in generationConfig (they belong
+at setup level), missing Rustls crypto provider, and binary JSON server frames
+previously ignored. Localhost regression now includes binary setup/text responses.
+
+Still blocked: actual audio inference/free-tier/billing validation, measured
 word-to-screen latency, EN↔UZ/RU↔UZ mixed-language quality, real Meet/Zoom/video and
-microphone/both tests, TCC/revocation, network/stop behavior on live devices, long
-sessions, quota/billing validation. Automated mocks are not those acceptance gates.
+microphone/both tests, TCC/revocation, network/stop behavior on live devices and long
+sessions. Authenticated setup and automated mocks are not those acceptance gates.
 Existing P0–P5 remain open. No Git remote exists; no dev/main/remote delivery claimed.
 
 References:
