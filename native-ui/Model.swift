@@ -12,6 +12,7 @@ struct Appearance: Codable, Equatable {
     var height = 190.0
     var x: Double?
     var y: Double?
+    // Legacy preference keys retained for backward decoding; no longer restrict scrollback.
     var visiblePairs = 1
     var compactText = true
     var animations = true
@@ -82,15 +83,18 @@ struct CaptionTimeline {
     private var outputIndex: [String: Int] = [:]
     private(set) var pairs: [CaptionPair] = []
     mutating func clear() { pairs.removeAll(); inputIndex.removeAll(); outputIndex.removeAll() }
-    mutating func consume(_ frame: WireFrame) throws {
+    mutating func consume(_ frame: WireFrame, retiring: (CaptionPair) throws -> Void = { _ in }) throws {
         guard frame.kind == "text" || frame.kind == "boundary" else { return }
         guard let source = frame.source, ["system", "microphone"].contains(source) else { throw ModelError.invalidSource }
         if let text = frame.original { try append(text, source: source, translated: false) }
         if let text = frame.translation { try append(text, source: source, translated: true) }
         if frame.inputFinished == true { finish(source: source, translated: false) }
         if frame.outputFinished == true { finish(source: source, translated: true) }
-        // Retain bounded recent history, never evict a row whose counterpart is pending.
-        while pairs.count > 48, let first = pairs.first, first.originalFinal && first.translationFinal { pairs.removeFirst() }
+        // Keep the alignment cache bounded; hand final rows to scrollback BEFORE eviction.
+        // A rejected retirement stops capture, never silently drops history.
+        while pairs.count > 48, let first = pairs.first, first.originalFinal && first.translationFinal {
+            try retiring(first); pairs.removeFirst()
+        }
         if pairs.count > 64 { throw ModelError.alignmentBacklog }
     }
     private mutating func row(source: String, index: Int) throws -> Int {
@@ -127,28 +131,61 @@ struct CaptionTimeline {
             if (translated ? pairs[i].translation.utf8.count : pairs[i].original.utf8.count) > 16000 { throw ModelError.oversize }
         }
     }
-    enum ModelError: Error { case invalidSource, oversize, alignmentBacklog }
+    enum ModelError: Error { case invalidSource, oversize, alignmentBacklog, historyLimit }
+}
+struct CaptionHistory {
+    private(set) var rows: [CaptionPair] = []
+    private(set) var bytes = 0
+    let maxBytes: Int
+    let maxRows: Int
+    init(maxBytes: Int = 16_777_216, maxRows: Int = 10_000) {
+        self.maxBytes = maxBytes; self.maxRows = maxRows
+    }
+    mutating func append(_ row: CaptionPair) throws {
+        let size = row.original.utf8.count + row.translation.utf8.count
+        guard rows.count < maxRows, size <= maxBytes - bytes else { throw CaptionTimeline.ModelError.historyLimit }
+        rows.append(row); bytes += size
+    }
+    mutating func clear() { rows.removeAll(); bytes = 0 }
 }
 @MainActor final class Captions: ObservableObject {
     @Published private(set) var rows: [CaptionPair] = []
     private var timeline = CaptionTimeline()
     private var interims: [String: String] = [:]
-    func clear() { timeline.clear(); interims.removeAll(); rows = [] }
+    private var history: CaptionHistory
+    private var meetingID = UUID().uuidString
+    init(historyMaxBytes: Int = 16_777_216, historyMaxRows: Int = 10_000) {
+        history = CaptionHistory(maxBytes: historyMaxBytes, maxRows: historyMaxRows)
+    }
+    func clear() { timeline.clear(); interims.removeAll(); history.clear(); meetingID = UUID().uuidString; rows = [] }
+    // Starting a new capture must not erase previous scrollback or reuse row IDs.
+    func beginMeeting() throws {
+        var next = history
+        for row in rows.dropFirst(history.rows.count) { try next.append(row) }
+        history = next; timeline.clear(); interims.removeAll(); meetingID = UUID().uuidString
+        rows = history.rows
+    }
+    private func identified(_ pair: CaptionPair) -> CaptionPair {
+        CaptionPair(id: "\(meetingID)-\(pair.id)", source: pair.source, original: pair.original, translation: pair.translation, originalFinal: pair.originalFinal, translationFinal: pair.translationFinal)
+    }
     func consume(_ frame: WireFrame) throws {
-        try timeline.consume(frame)
-        if frame.kind == "text", let source = frame.source {
+        var failure: Error?
+        do { try timeline.consume(frame) { [self] pair in try history.append(identified(pair)) } }
+        catch { failure = error }
+        if frame.kind == "text", let source = frame.source, ["system", "microphone"].contains(source) {
             if let interim = frame.interim, !interim.isEmpty {
                 guard interim.utf8.count <= 16000 else { throw CaptionTimeline.ModelError.oversize }
                 interims[source] = interim
             }
             if let original = frame.original, !original.isEmpty { interims.removeValue(forKey: source) }
         }
-        var visible = timeline.pairs.filter { !$0.original.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        var visible = timeline.pairs.filter { !$0.original.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !$0.translation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.map { identified($0) }
         for source in interims.keys.sorted() {
             // Provisional input is not falsely paired with an untagged output.
-            var pair = CaptionPair(id: "\(source)-interim", source: source)
+            var pair = CaptionPair(id: "\(meetingID)-\(source)-interim", source: source)
             pair.original = interims[source] ?? ""; visible.append(pair)
         }
-        rows = visible
+        rows = history.rows + visible
+        if let failure { throw failure }
     }
 }

@@ -21,7 +21,9 @@ import CoreFoundation
             frame.message = "fixture-private-excluded"
             try! journal.record([frame]); try! captions.consume(frame)
         }
-        precondition(captions.rows.count <= 48 && !captions.rows.contains { $0.original.contains("entry-0:") })
+        // User now requires UI scrollback as well as complete files; the separate
+        // timeline cache remains bounded (tested independently in NativeTests).
+        precondition(captions.rows.count == 120 && captions.rows.first!.original.contains("entry-0:") && captions.rows.last!.translation.contains("tarjima-119:"))
         try! journal.record([WireFrame(kind: "status", message: "fixture-private-excluded"), WireFrame(kind: "error", message: "fixture-private-excluded"), WireFrame(kind: "text", source: "system", interim: "Unfinished provisional input")])
         finish(journal, expected: true)
         precondition(!writerFailure)
@@ -60,6 +62,6 @@ import CoreFoundation
         var settings = Appearance(); settings.saveMeetings = false; settings.meetingFolder = root.appendingPathComponent("disabled").path
         try! disabled.start(appearance: settings)
         precondition(!disabled.busy && !FileManager.default.fileExists(atPath: settings.meetingFolder))
-        print("MEETING_FILES_SELFTEST: PASS — all 120 entries beyond UI eviction, EN/RU/UZ, two sources, provisional labels, private/exclusive files, status exclusion, queue/file bounds, failure/disabled-save paths")
+        print("MEETING_FILES_SELFTEST: PASS — all 120 entries in scrollback and files, EN/RU/UZ, two sources, provisional labels, private/exclusive files, status exclusion, queue/file bounds, failure/disabled-save paths")
     }
 }

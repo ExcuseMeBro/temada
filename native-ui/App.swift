@@ -45,7 +45,7 @@ import Combine
             do { try self.meetingFiles.record(frames) }
             catch { self.worker.fail("Meeting save limit/write failure. Partial files retained."); return }
             do { for frame in frames { try self.captions.consume(frame) } }
-            catch { self.worker.fail("Caption alignment/size limit reached. Stop and clear before restarting.") }
+            catch { self.worker.fail("Caption history/alignment/size limit reached. Capture stopped; save meeting files before clearing text.") }
         }
         worker.onStopped = { [weak self] in
             guard let self else { return }
@@ -99,9 +99,11 @@ import Combine
         guard consent, credentials.valid, !worker.running, !meetingFiles.busy else { return }
         permissions.refresh()
         guard permissions.canStart(source: preferences.appearance.source) else { showSettings(); return }
+        do { try captions.beginMeeting() }
+        catch { worker.fail("Caption history limit reached. Save meeting files before clearing text."); return }
         do { try meetingFiles.start(appearance: preferences.appearance) }
         catch { worker.fail("Cannot create private meeting files. Choose another folder or turn saving off."); return }
-        captions.clear(); overlay.orderFrontRegardless()
+        overlay.orderFrontRegardless()
         worker.start(appearance: preferences.appearance, credentials: credentials, consent: consent)
         if worker.running { settings?.orderOut(nil) } else { finishMeeting() }
     }

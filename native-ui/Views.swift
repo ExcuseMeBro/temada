@@ -15,23 +15,22 @@ struct CaptionOverlay: View {
     @ObservedObject var preferences: Preferences
     @ObservedObject var captions: Captions
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var follow = CaptionFollowState()
     var body: some View {
         let a = preferences.appearance
-        let rows = Array(captions.rows.suffix(a.compactText ? 1 : a.visiblePairs))
+        let rows = captions.rows
         let animation: Animation? = a.animations && !reduceMotion ? .easeOut(duration: 0.18) : nil
         // Deliberately NO controls, status, source headers or placeholders here.
         ScrollViewReader { proxy in
-            ScrollView(.vertical, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 8) {
+            ScrollView(.vertical, showsIndicators: true) {
+                LazyVStack(alignment: .leading, spacing: 8) {
                     ForEach(rows) { pair in
                         VStack(alignment: .leading, spacing: 3) {
-                            // Clip presentation only: full text stays in model/journal.
+                            // Compact window/fonts, but never truncate transcript history.
                             Text(pair.original).font(.system(size: a.originalSize, weight: .regular)).foregroundStyle(Color(hex: a.originalColor))
-                                .lineLimit(a.compactText ? 2 : nil).truncationMode(.head)
                                 .fixedSize(horizontal: false, vertical: true)
                             if !pair.translation.isEmpty {
                                 Text(pair.translation).font(.system(size: a.translationSize, weight: .medium)).foregroundStyle(Color(hex: a.translationColor))
-                                    .lineLimit(a.compactText ? 3 : nil).truncationMode(.head)
                                     .fixedSize(horizontal: false, vertical: true)
                             }
                         }
@@ -44,8 +43,10 @@ struct CaptionOverlay: View {
                 .padding(12)
                 .animation(animation, value: rows.map(\.id))
             }
+            .captionScrollFollowing($follow)
             .onChange(of: captions.rows) { _, rows in
-                if let last = rows.last { withAnimation(animation) { proxy.scrollTo(last.id, anchor: .bottom) } }
+                if rows.isEmpty { follow.latest = true }
+                if follow.latest, let last = rows.last { withAnimation(animation) { proxy.scrollTo(last.id, anchor: .bottom) } }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -156,11 +157,10 @@ struct NativeSettings: View {
                     VStack(spacing: 14) {
                         HStack {
                             Button("Compact layout") { preferences.useCompactLayout() }
-                            Text("620 × 190 · 17/20 pt · one caption pair").font(.caption).foregroundStyle(.secondary)
+                            Text("620 × 190 · 17/20 pt · full scrollback").font(.caption).foregroundStyle(.secondary)
                             Spacer()
                         }
-                        Toggle("Compact text: latest pair, 2 original + 3 translation lines", isOn: $preferences.appearance.compactText)
-                        Text("Display only. Full transcripts and translations are kept in meeting files when saving is on. Turn compact text off for expanded history.").font(.caption).foregroundStyle(.secondary)
+                        Text("All original text and translations stay in scrollback until you explicitly Clear text or quit. Scroll up to read history; return to the bottom to follow live captions (macOS 15+). Meeting files keep previous sessions when saving is on. History/file safety limits stop capture instead of silently deleting text.").font(.caption).foregroundStyle(.secondary)
                         sizeSlider("Original", value: $preferences.appearance.originalSize, range: 12...64)
                         sizeSlider("Translation", value: $preferences.appearance.translationSize, range: 12...72)
                         HStack {
@@ -171,7 +171,6 @@ struct NativeSettings: View {
                         sizeSlider("Background opacity", value: $preferences.appearance.opacity, range: 0.1...1, percentage: true)
                         sizeSlider("Window width", value: $preferences.appearance.width, range: 340...1800)
                         sizeSlider("Window height", value: $preferences.appearance.height, range: 140...1200)
-                        Stepper("Visible pairs: \(preferences.appearance.visiblePairs)", value: $preferences.appearance.visiblePairs, in: 1...12).disabled(preferences.appearance.compactText)
                         Toggle("Smooth transitions (respects Reduce Motion)", isOn: $preferences.appearance.animations)
                         Text("Drag anywhere on the overlay, including text. Resize any edge or corner, or use the sliders. Position and size are saved. Overlay contains only original text and translation.")
                             .font(.caption).foregroundStyle(.secondary)

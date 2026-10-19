@@ -7,6 +7,7 @@ import AppKit
     }
     static func run() {
         EditingTests.run()
+        HistoryTests.run()
         PermissionTests.run()
         MeetingFileTests.run()
         var t = CaptionTimeline()
@@ -125,7 +126,7 @@ import AppKit
         precondition(panel.frame.width == 620 && panel.frame.height == 190 && captions.rows == beforeCompact, "Compact presentation resized window or truncated full transcript model")
         let compactReload = Preferences(defaults: defaults)
         precondition(compactReload.appearance.width == 620 && compactReload.appearance.height == 190 && compactReload.appearance.compactText)
-        print("COMPACT_OVERLAY_SELFTEST: PASS — 620x190, 17/20pt, latest pair, long Unicode model intact, persistence and non-layout preferences retained")
+        print("COMPACT_OVERLAY_SELFTEST: PASS — 620x190, 17/20pt, full scrollback, long Unicode model intact, persistence and non-layout preferences retained")
         panel.close()
         InteractionTests.run(preferences: prefs)
         print("NATIVE_SELFTEST: PASS — sentence rows, partial/order/source isolation, UTF8/bounds, persistence/clamp, short-frame IPC before EOF")

@@ -40,8 +40,8 @@ against that app while it is active.
 - Overlay has ONLY original text with translation immediately underneath each row;
   no buttons, status, speaker headings or persistent settings panels. Settings hide
   after Start; closing Settings leaves the tray app running.
-- Independent font sizes and colors, background color/opacity, width/height, visible
-  row count, animation switch. Drag ANYWHERE, including on caption text; resize all
+- Independent font sizes and colors, background color/opacity, width/height,
+  animation switch; all full original/translation rows remain scrollable. Drag ANYWHERE, including on caption text; resize all
   four edges/four corners (8pt edges, forgiving16pt corner targets). AppKit handles
   events before SwiftUI, so text/ScrollView cannot swallow the native window drag.
   Resize keeps the opposite edge fixed and clamps to340×140…1800×1200pt. Scroll-wheel
@@ -59,10 +59,18 @@ against that app while it is active.
   can now be saved locally (see Meeting files). Start is manual and requires a
   valid key and consent. Key/source/target/save-toggle/folder changes revoke
   consent; capture and recording settings cannot change during a session.
-- Animated row insertion/autoscroll; respects macOS Reduce Motion. Old paired rows
-  are bounded in memory. Unpaired backlog/oversized frames stop visibly rather than
-  silently dropping text. Clear is disabled during capture to avoid resetting the
-  pairing indices in the middle of an untagged provider stream.
+- Full scrollback, not a latest-pair suffix or 2/3-line crop. Compact layout changes
+  only window/font sizes. New rows move older text upward; `LazyVStack` avoids
+  eagerly creating every row view. On macOS 15+, scrolling back suspends live
+  following; returning to the bottom resumes it. macOS 14 keeps full history but
+  still auto-follows incoming text. Animations respect Reduce Motion.
+  Starting another capture preserves earlier scrollback and unique row IDs.
+  Retired history is bounded at 16MiB UTF-8 text/10,000 rows, separately from the
+  48-row alignment cache (64 pending-row hard limit). Limits stop capture visibly,
+  retaining accepted rows rather than silently deleting them. Oversized frames or
+  missing counterpart backlogs can still stop a session. Explicit Clear text or
+  quitting clears in-memory history; use meeting files for persistence across quits.
+  Clear is disabled during capture to avoid resetting pairing indices.
 - Original/translation deltas are split at sentence punctuation + whitespace (or
   provider `finished` boundaries), paired FIFO **within each source**, and kept
   under stable local IDs. Partial originals/translations grow in place. Interim
@@ -113,7 +121,7 @@ Default: `~/Library/Application Support/Temada/Meetings`. Each session creates a
 unique private `Meeting-<UTC timestamp>-<UUID>/` directory (0700), never overwriting
 another session. `meeting.jsonl` (0600) journals timestamped original/translation
 stream deltas, provisional input and finish boundaries independently of the
-48-row overlay. No audio, API-key bootstrap, or status/error messages are archived.
+alignment cache and scrollback. No audio, API-key bootstrap, or status/error messages are archived.
 These are **plaintext** meeting records, not encrypted; choose a private folder.
 Cloud-synced destinations/OS backups may copy them. Retention/deletion is manual.
 
@@ -136,7 +144,9 @@ manual Stop and the existing 10-minute cap can still truncate pending speech.
 Disabling saving/clearing text does not delete earlier meetings. Generated audio
 remains muted/discarded; this feature does NOT enable audio recording.
 
-Synthetic tests cover 120 mixed-language/source entries beyond UI eviction,
+Synthetic tests cover 120 mixed-language/source entries in both scrollback and files,
+240 mixed-language pairs beyond the alignment cache, stable IDs across starts,
+long/translation-first text, stop-without-loss history bounds and follow/backscroll state,
 private permissions, unique/exclusive output, provisional labels, status/message
 exclusion, queue/file limits, export failure, save-off and appearance migration.
 Real-device meeting recording/readability/performance remain manual acceptance.

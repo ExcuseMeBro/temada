@@ -7,7 +7,7 @@ struct MeetingRecord: Codable {
     let frame: WireFrame
 }
 // One private serial writer, bounded reserved bytes and outstanding queue. Never
-// archives status/error messages or credentials; independent of the 48-row UI.
+// archives status/error messages or credentials; independent of the alignment cache/UI.
 final class MeetingJournal: @unchecked Sendable {
     let folder: URL
     private let journal: URL
