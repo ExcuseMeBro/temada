@@ -59,6 +59,7 @@ struct NativeSettings: View {
     @ObservedObject var preferences: Preferences
     @ObservedObject var worker: StreamingWorker
     @ObservedObject var permissions: RecordingPermissions
+    @ObservedObject var credentials: APICredentials
     @State private var consent = false
     var toggleOverlay: () -> Void
     var clear: () -> Void
@@ -100,9 +101,13 @@ struct NativeSettings: View {
                 GroupBox("2 · Audio & Gemini Live") {
                     VStack(alignment: .leading, spacing: 12) {
                         HStack {
-                            TextField("Existing .env file path", text: $preferences.appearance.envPath)
-                            Button("Choose…") { chooseFile() }
+                            SecureField("Gemini API key", text: $credentials.apiKey)
+                                .textFieldStyle(.roundedBorder)
+                                .accessibilityLabel("Gemini API key")
+                            Button("Clear key") { credentials.apiKey = "" }.disabled(credentials.apiKey.isEmpty)
                         }
+                        Text("API key stays in memory for this launch only. It is not saved; enter it again after quitting MCLBB.")
+                            .font(.caption).foregroundStyle(.secondary)
                         HStack {
                             Picker("Audio", selection: $preferences.appearance.source) {
                                 Text("All system audio / video").tag("system"); Text("Microphone").tag("microphone"); Text("Both (two sessions)").tag("both")
@@ -120,7 +125,7 @@ struct NativeSettings: View {
                 }.disabled(worker.running)
                 HStack {
                     Button(worker.running ? "Stop captions" : "Start captions") { if worker.running { worker.stop() } else { start(consent) } }
-                        .buttonStyle(.borderedProminent).disabled(!worker.running && (!consent || !permissions.canStart(source: preferences.appearance.source)))
+                        .buttonStyle(.borderedProminent).disabled(!worker.running && (!consent || !credentials.valid || !permissions.canStart(source: preferences.appearance.source)))
                     Button("Show / hide overlay", action: toggleOverlay)
                     Button("Clear text", action: clear).disabled(worker.running)
                 }
@@ -148,7 +153,7 @@ struct NativeSettings: View {
             }.padding(24)
         }
         .frame(minWidth: 640, minHeight: 560)
-        .onChange(of: preferences.appearance.envPath) { _, _ in consent = false }
+        .onChange(of: credentials.apiKey) { _, _ in consent = false }
         .onChange(of: preferences.appearance.source) { _, _ in consent = false; permissions.refresh() }
         .onChange(of: preferences.appearance.target) { _, _ in consent = false }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in permissions.refresh() }
@@ -160,9 +165,5 @@ struct NativeSettings: View {
             Text(percentage ? "\(Int(value.wrappedValue * 100))%" : "\(Int(value.wrappedValue))")
                 .monospacedDigit().frame(width: 48, alignment: .trailing)
         }
-    }
-    private func chooseFile() {
-        let panel = NSOpenPanel(); panel.canChooseDirectories = false; panel.allowsMultipleSelection = false; panel.showsHiddenFiles = true
-        if panel.runModal() == .OK, let url = panel.url { preferences.appearance.envPath = url.path }
     }
 }

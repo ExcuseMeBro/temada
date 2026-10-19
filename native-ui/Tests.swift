@@ -49,6 +49,35 @@ import AppKit
         precondition(bad.width == 340 && bad.originalSize == 21 && bad.opacity == 1 && bad.visiblePairs == 12 && Appearance.isColor(bad.originalColor))
         let json = try! JSONEncoder().encode(prefs.appearance)
         precondition(!String(data: json, encoding: .utf8)!.contains("apiKey"))
+        precondition(!String(data: json, encoding: .utf8)!.contains("envPath"))
+        let credentials = APICredentials()
+        precondition(!credentials.valid)
+        credentials.apiKey = "fixture-quote\"-slash\\-only"
+        precondition(credentials.valid)
+        do { _ = try credentials.bootstrap(consent: false); preconditionFailure("Credential transfer without consent") } catch {}
+        let bootstrap = try! credentials.bootstrap(consent: true)
+        precondition(bootstrap.count <= 4096 && bootstrap.last == 10)
+        let credentialPipe = Pipe()
+        try! StreamingWorker.sendBootstrap(bootstrap, to: credentialPipe.fileHandleForWriting)
+        precondition(credentialPipe.fileHandleForReading.availableData == bootstrap)
+        try! credentialPipe.fileHandleForReading.close()
+        do { try StreamingWorker.sendBootstrap(bootstrap, to: credentialPipe.fileHandleForWriting); preconditionFailure("Broken credential pipe accepted") } catch {}
+        try! credentialPipe.fileHandleForWriting.close()
+        let parsed = try! JSONSerialization.jsonObject(with: bootstrap) as! [String: String]
+        precondition(parsed["apiKey"] == credentials.apiKey)
+        let arguments = StreamingWorker.arguments(appearance: prefs.appearance)
+        precondition(!arguments.contains(credentials.apiKey) && !arguments.contains("--env-file"))
+        precondition(!String(data: json, encoding: .utf8)!.contains(credentials.apiKey))
+        precondition(APICredentials().apiKey.isEmpty, "Credentials persisted across model construction")
+        let gatedWorker = StreamingWorker()
+        gatedWorker.start(appearance: prefs.appearance, credentials: credentials, consent: false)
+        precondition(!gatedWorker.running && !gatedWorker.status.contains(credentials.apiKey))
+        for badKey in ["", "has space", "ключ", "has\nnewline", String(repeating: "x", count: 1025)] {
+            credentials.apiKey = badKey; precondition(!credentials.valid)
+        }
+        credentials.apiKey = String(repeating: "x", count: 1024)
+        precondition(credentials.valid && (try! credentials.bootstrap(consent: true)).count <= 4096)
+        print("CREDENTIAL_SELFTEST: PASS — memory-only, consent gate, escaped bounded pipe frame, argv/preferences exclusion")
         let decoded = try! JSONDecoder().decode(WireFrame.self, from: Data("{\"kind\":\"boundary\",\"source\":\"system\",\"inputFinished\":true}".utf8))
         precondition(decoded.inputFinished == true)
         NSApplication.shared.setActivationPolicy(.prohibited)

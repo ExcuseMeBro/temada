@@ -14,7 +14,6 @@ struct Appearance: Codable, Equatable {
     var y: Double?
     var visiblePairs = 4
     var animations = true
-    var envPath = ""
     var source = "system"
     var target = "uz"
     mutating func clamp() {

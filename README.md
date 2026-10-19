@@ -19,7 +19,8 @@ bash scripts/test-native.sh
 export MC_CODESIGN_IDENTITY="YOUR_APPROVED_CERTIFICATE_40_HEX_SHA1"
 bash scripts/test-signing.sh  # local key use; user handles any Keychain prompt
 bash scripts/build-native.sh
-open "dist/MCLBB.app" --args --env-file /absolute/path/to/.env
+open "dist/MCLBB.app"
+# In Settings, paste the Gemini API key into the masked API-key field.
 ```
 
 Build refuses an existing destination, including an app that might be running.
@@ -45,9 +46,16 @@ against that app while it is active.
   Resize keeps the opposite edge fixed and clamps to340×140…1800×1200pt. Scroll-wheel
   text scrolling is unchanged; no global input monitors/Accessibility permission.
   Appearance,
-  position, dimensions, source/target and .env **path** persist in UserDefaults.
+  position, dimensions and source/target persist in UserDefaults.
+- Enter the Gemini API key in the masked **API key** field, not a file chooser.
+  The native app does NOT load .env files. The key remains in launch-only memory;
+  it is not written to preferences/Keychain, logs, argv or environment variables.
+  After fresh consent, a bounded JSON bootstrap frame sends it only through the
+  owned worker's stdin pipe; closing that pipe still cancels the worker. Clear key
+  removes the editable value; quitting requires entry again. This is not a promise
+  of cryptographic zeroization or protection against OS swap/crash dumps.
 - Consent is NOT saved; keys/captions/audio are never saved by this UI. Start is
-  manual, requires consent and an explicit .env. Source/path/target changes revoke
+  manual and requires a valid key and consent. Key/source/target changes revoke
   consent; settings cannot change the capture configuration during a session.
 - Animated row insertion/autoscroll; respects macOS Reduce Motion. Old paired rows
   are bounded in memory. Unpaired backlog/oversized frames stop visibly rather than

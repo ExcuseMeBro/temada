@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import Darwin
 
 // Bounded blocking pipe reader lives off the UI thread. Main-thread delivery is
 // synchronous so a busy UI backpressures the pipe, not an unbounded Task queue.
@@ -50,14 +51,23 @@ final class FrameReader: @unchecked Sendable {
     private var generation = UUID()
     var onFrames: (([WireFrame]) -> Void)?
     var onStopped: (() -> Void)?
-    func start(appearance: Appearance, consent: Bool) {
+    static func arguments(appearance: Appearance) -> [String] {
+        ["--native-worker", "--cloud-consent", "--source", appearance.source, "--target", appearance.target]
+    }
+    static func sendBootstrap(_ data: Data, to handle: FileHandle) throws {
+        // A failed child must not SIGPIPE-kill the UI while credentials are sent.
+        guard fcntl(handle.fileDescriptor, F_SETNOSIGPIPE, 1) != -1 else { throw BootstrapError.pipe }
+        try handle.write(contentsOf: data)
+    }
+    private enum BootstrapError: Error { case pipe }
+    func start(appearance: Appearance, credentials: APICredentials, consent: Bool) {
         guard !running else { return }
         guard consent else { status = "Cloud/cost consent is required."; return }
-        guard !appearance.envPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { status = "Choose an existing .env file."; return }
+        guard let bootstrap = try? credentials.bootstrap(consent: consent) else { status = "Enter a valid Gemini API key before Start."; return }
         guard let folder = Bundle.main.executableURL?.deletingLastPathComponent() else { status = "App bundle unavailable."; return }
         let task = Process(), stdin = Pipe(), stdout = Pipe()
         task.executableURL = folder.appendingPathComponent("meeting-captions")
-        task.arguments = ["--native-worker", "--cloud-consent", "--env-file", appearance.envPath, "--source", appearance.source, "--target", appearance.target]
+        task.arguments = Self.arguments(appearance: appearance)
         task.standardInput = stdin; task.standardOutput = stdout; task.standardError = FileHandle.nullDevice
         let id = UUID(); generation = id
         task.terminationHandler = { [weak self] task in
@@ -66,7 +76,7 @@ final class FrameReader: @unchecked Sendable {
                 guard let self, self.generation == id else { return }
                 self.running = false; self.process = nil
                 try? self.input?.close(); self.input = nil
-                if code != 0 && !self.status.hasPrefix("Error:") { self.status = "Worker stopped (\(code)); check .env, quota and permissions." }
+                if code != 0 && !self.status.hasPrefix("Error:") { self.status = "Worker stopped (\(code)); check API key, quota and permissions." }
                 else if !self.status.hasPrefix("Error:") { self.status = "Stopped. Pending audio/text may have been discarded." }
                 self.onStopped?()
             }
@@ -87,6 +97,8 @@ final class FrameReader: @unchecked Sendable {
                 guard let self, self.generation == id else { return }
                 self.fail("Invalid or oversized worker response; stopped.")
             }).start()
+            do { try Self.sendBootstrap(bootstrap, to: stdin.fileHandleForWriting) }
+            catch { fail("Cannot send API credentials to owned worker; stopped.") }
         } catch {
             try? stdin.fileHandleForWriting.close(); try? stdout.fileHandleForReading.close()
             status = "Cannot start bundled worker. Rebuild the native app."; running = false

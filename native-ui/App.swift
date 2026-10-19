@@ -7,6 +7,7 @@ import Combine
     let captions = Captions()
     let worker = StreamingWorker()
     let permissions = RecordingPermissions()
+    let credentials = APICredentials()
     private var statusItem: NSStatusItem!
     private var overlay: NSPanel!
     private var settings: NSWindow?
@@ -17,8 +18,6 @@ import Combine
     private var pendingQuit = false
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
-        let args = CommandLine.arguments
-        if let index = args.firstIndex(of: "--env-file"), args.indices.contains(index + 1) { preferences.appearance.envPath = args[index + 1] }
         overlay = CaptionPanel(contentRect: NSRect(x: 0, y: 0, width: preferences.appearance.width, height: preferences.appearance.height), styleMask: [.borderless, .resizable, .nonactivatingPanel], backing: .buffered, defer: false)
         overlay.title = "MCLBB — subtitles"
         overlay.isReleasedWhenClosed = false; overlay.level = .floating
@@ -69,10 +68,11 @@ import Combine
     }
     @objc func showSettings() {
         if settings == nil {
-            let view = NativeSettings(preferences: preferences, worker: worker, permissions: permissions,
+            let view = NativeSettings(preferences: preferences, worker: worker, permissions: permissions, credentials: credentials,
                 toggleOverlay: { [weak self] in self?.toggleOverlay() }, clear: { [weak self] in self?.clearText() }, start: { [weak self] consent in self?.startCapture(consent: consent) })
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 700, height: 760), styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
             window.title = "MCLBB — Settings"; window.isReleasedWhenClosed = false
+            window.isRestorable = false // Never archive a window containing API credentials.
             window.contentView = NSHostingView(rootView: view); window.center(); settings = window
         }
         NSApp.activate(ignoringOtherApps: true); settings?.makeKeyAndOrderFront(nil)
@@ -82,11 +82,11 @@ import Combine
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool { menuItem.action != #selector(clearText) || !worker.running }
     @objc func toggleCapture() { if worker.running { worker.stop() } else { showSettings() } }
     private func startCapture(consent: Bool) {
-        guard consent, !worker.running else { return }
+        guard consent, credentials.valid, !worker.running else { return }
         permissions.refresh()
         guard permissions.canStart(source: preferences.appearance.source) else { showSettings(); return }
         captions.clear(); overlay.orderFrontRegardless()
-        worker.start(appearance: preferences.appearance, consent: consent)
+        worker.start(appearance: preferences.appearance, credentials: credentials, consent: consent)
         if worker.running { settings?.orderOut(nil) }
     }
     @objc func quit() { NSApp.terminate(nil) }

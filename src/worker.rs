@@ -1,16 +1,39 @@
 //! Private native-UI JSON-lines bridge. stdout contains captions, never keys or logs.
-use super::{env_key, live, Event};
+use super::{live, Event};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{
     io::{BufRead, Read, Write},
-    path::Path,
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc, Arc,
     },
     thread,
 };
-fn options(args: &[String]) -> Result<live::Config, &'static str> {
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Credentials {
+    #[serde(rename = "apiKey")]
+    api_key: String,
+}
+fn read_key(input: &mut impl BufRead) -> Result<String, &'static str> {
+    let mut frame = Vec::new();
+    input
+        .take(4097)
+        .read_until(b'\n', &mut frame)
+        .map_err(|_| "Cannot read API credential frame")?;
+    if frame.len() > 4096 || frame.last() != Some(&b'\n') {
+        return Err("Missing or oversized API credential frame");
+    }
+    let credentials: Credentials = serde_json::from_slice(&frame)
+        .map_err(|_| "Invalid API credential frame (details hidden)")?;
+    let key = credentials.api_key.trim();
+    if key.is_empty() || key.len() > 1024 || !key.bytes().all(|b| b.is_ascii_graphic()) {
+        return Err("Enter a valid nonempty API key (at most 1024 ASCII characters)");
+    }
+    Ok(key.to_owned())
+}
+fn options(args: &[String], input: &mut impl BufRead) -> Result<live::Config, &'static str> {
     if !args.iter().any(|a| a == "--cloud-consent") {
         return Err("Explicit cloud consent required");
     }
@@ -25,9 +48,10 @@ fn options(args: &[String]) -> Result<live::Config, &'static str> {
     {
         return Err("Unsupported language/source");
     }
-    let key = env_key::load(Path::new(
-        get("--env-file").ok_or("Explicit .env path required")?,
-    ))?;
+    if args.iter().any(|arg| arg == "--env-file") {
+        return Err("Native worker accepts API credentials via stdin only");
+    }
+    let key = read_key(input)?;
     let helper = std::env::current_exe()
         .map_err(|_| "Worker path unavailable")?
         .with_file_name("capture-helper");
@@ -53,7 +77,7 @@ fn wire(event: Event) -> Value {
     }
 }
 pub fn run(args: &[String]) -> i32 {
-    let config = match options(args) {
+    let config = match options(args, &mut std::io::stdin().lock()) {
         Ok(c) => c,
         Err(e) => {
             println!("{}", json!({"kind":"error","message":e}));
@@ -98,8 +122,10 @@ pub fn run(args: &[String]) -> i32 {
 mod tests {
     use super::*;
     #[test]
-    fn consent_before_file_read() {
-        assert!(options(&[]).err().unwrap().contains("consent"));
+    fn consent_before_key_read() {
+        let mut input = std::io::Cursor::new(b"do-not-read");
+        assert!(options(&[], &mut input).err().unwrap().contains("consent"));
+        assert_eq!(input.position(), 0);
     }
     #[test]
     fn invalid_source_before_key_read() {
@@ -113,7 +139,61 @@ mod tests {
             "/nonexistent",
         ]
         .map(String::from);
-        assert!(options(&args).err().unwrap().contains("Unsupported"));
+        let mut input = std::io::Cursor::new(b"do-not-read");
+        assert!(options(&args, &mut input)
+            .err()
+            .unwrap()
+            .contains("Unsupported"));
+        assert_eq!(input.position(), 0);
+    }
+    #[test]
+    fn credential_frame_is_bounded_redacted_and_strict() {
+        for input in [
+            "".to_owned(),
+            "{\"apiKey\":\"secret-invalid\"}".to_owned(),
+            "{\"apiKey\":\"\"}\n".to_owned(),
+            "{\"apiKey\":\"secret invalid\"}\n".to_owned(),
+            "{\"apiKey\":\"secret-ключ\"}\n".to_owned(),
+            "{\"apiKey\":\"secret\\ninvalid\"}\n".to_owned(),
+            "{\"apiKey\":\"secret\",\"extra\":true}\n".to_owned(),
+            format!("{{\"apiKey\":\"{}\"}}\n", "x".repeat(1025)),
+            format!("{}\n", "x".repeat(4096)),
+        ] {
+            let error = read_key(&mut std::io::Cursor::new(input)).unwrap_err();
+            assert!(!error.contains("secret"));
+        }
+        let key = "fixture-quote\"-backslash\\-only";
+        let frame = format!("{}\nSTOP\n", json!({"apiKey":key}));
+        let mut reader = std::io::BufReader::new(std::io::Cursor::new(frame));
+        assert_eq!(read_key(&mut reader).unwrap(), key);
+        let mut remaining = String::new();
+        reader.read_to_string(&mut remaining).unwrap();
+        assert_eq!(remaining, "STOP\n", "Bootstrap consumed cancellation input");
+        assert_eq!(
+            read_key(&mut std::io::Cursor::new(format!(
+                "{}\n",
+                json!({"apiKey":"x".repeat(1024)})
+            )))
+            .unwrap()
+            .len(),
+            1024
+        );
+    }
+    #[test]
+    fn stdin_only_native_options() {
+        let args = ["--cloud-consent", "--source", "system", "--target", "uz"].map(String::from);
+        let mut input = std::io::Cursor::new(b"{\"apiKey\":\"fixture-only\"}\n");
+        let config = options(&args, &mut input).unwrap();
+        assert_eq!(config.key, "fixture-only");
+        assert_eq!(config.source, "system");
+        let mut args = args.to_vec();
+        args.extend(["--env-file".into(), "/nonexistent".into()]);
+        let mut unread = std::io::Cursor::new(b"do-not-read");
+        assert!(options(&args, &mut unread)
+            .err()
+            .unwrap()
+            .contains("stdin only"));
+        assert_eq!(unread.position(), 0);
     }
     #[test]
     fn frame_is_escaped_json() {
