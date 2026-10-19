@@ -51,6 +51,9 @@ fn options(args: &[String], input: &mut impl BufRead) -> Result<live::Config, &'
     if args.iter().any(|arg| arg == "--env-file") {
         return Err("Native worker accepts API credentials via stdin only");
     }
+    if args.iter().any(|arg| arg == "--dictation") && (source != "microphone" || target != "en") {
+        return Err("Dictation requires microphone and English");
+    }
     let key = read_key(input)?;
     let helper = std::env::current_exe()
         .map_err(|_| "Worker path unavailable")?
@@ -86,15 +89,31 @@ pub fn run(args: &[String]) -> i32 {
     };
     let stop = Arc::new(AtomicBool::new(false));
     let input_stop = stop.clone();
-    // Only this owned worker's stdin controls it. UI closes pipe on Stop/exit.
+    let dictation = args.iter().any(|arg| arg == "--dictation");
+    let finish = Arc::new(AtomicBool::new(false));
+    let input_finish = finish.clone();
+    // FINISH stops only dictation audio and drains the final server turn.
+    // EOF/any other command remains cancellation, never a successful insertion.
     thread::spawn(move || {
+        let mut input = std::io::stdin().lock();
         let mut line = String::new();
-        let _ = std::io::stdin().lock().take(32).read_line(&mut line);
+        let _ = input.by_ref().take(32).read_line(&mut line);
+        if dictation && line == "FINISH\n" {
+            input_finish.store(true, Ordering::Relaxed);
+            line.clear();
+            let _ = input.by_ref().take(32).read_line(&mut line);
+        }
         input_stop.store(true, Ordering::Relaxed);
     });
     let (tx, rx) = mpsc::sync_channel(64);
     let worker_stop = stop.clone();
-    let worker = thread::spawn(move || live::run(config, worker_stop, tx));
+    let worker = thread::spawn(move || {
+        if dictation {
+            live::run_dictation(config, worker_stop, finish, tx)
+        } else {
+            live::run(config, worker_stop, tx)
+        }
+    });
     let mut output = std::io::stdout().lock();
     for event in rx {
         if writeln!(output, "{}", wire(event))
@@ -194,6 +213,26 @@ mod tests {
             .unwrap()
             .contains("stdin only"));
         assert_eq!(unread.position(), 0);
+    }
+    #[test]
+    fn dictation_requires_microphone_english_before_credentials() {
+        for (source, target) in [("system", "en"), ("microphone", "uz"), ("both", "en")] {
+            let args = [
+                "--cloud-consent",
+                "--dictation",
+                "--source",
+                source,
+                "--target",
+                target,
+            ]
+            .map(String::from);
+            let mut input = std::io::Cursor::new(b"do-not-read");
+            assert!(options(&args, &mut input)
+                .err()
+                .unwrap()
+                .contains("Dictation"));
+            assert_eq!(input.position(), 0);
+        }
     }
     #[test]
     fn frame_is_escaped_json() {

@@ -8,6 +8,7 @@ import AppKit
     static func run() {
         EditingTests.run()
         HistoryTests.run()
+        DictationTests.run()
         PermissionTests.run()
         MeetingFileTests.run()
         var t = CaptionTimeline()

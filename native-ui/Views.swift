@@ -65,6 +65,7 @@ struct NativeSettings: View {
     @ObservedObject var permissions: RecordingPermissions
     @ObservedObject var credentials: APICredentials
     @ObservedObject var meetingFiles: MeetingFiles
+    @ObservedObject var dictation: EnglishDictation
     @State private var consent = false
     @State private var pasteFailed = false
     var toggleOverlay: () -> Void
@@ -132,6 +133,27 @@ struct NativeSettings: View {
                         Toggle("I consent to cloud audio processing and possible API charges", isOn: $consent)
                     }.padding(8)
                 }.disabled(worker.running)
+                GroupBox("Uzbek → English at your cursor · ⌘Space") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Enable for this launch, focus an editable text caret, press ⌘Space and speak Uzbek. Press ⌘Space again to finish. Google processes microphone audio (API charges); 60s recording / 15s final-turn limit. No Send/Return event. Same English translation model, not a guarantee of perfect wording.").font(.caption)
+                        HStack {
+                            Button("Microphone access") { permissions.request(source: "microphone") }.disabled(worker.running)
+                            Button("Accessibility access", action: dictation.requestAccessibility).disabled(worker.running)
+                            Button("Check access", action: permissions.refresh).disabled(worker.running)
+                        }
+                        HStack {
+                            Button(dictation.armed ? "Disable ⌘Space" : "Enable ⌘Space") {
+                                if dictation.armed { dictation.disarm() }
+                                else { dictation.arm(consent: consent, credentialsValid: credentials.valid, microphoneReady: permissions.microphoneGranted) }
+                            }.disabled(!dictation.armed && (worker.running || meetingFiles.busy || !consent || !credentials.valid))
+                            Button("Cancel dictation") { dictation.cancel() }.disabled(!dictation.active)
+                            Button("Copy English draft") { dictation.copyDraft(to: .general) }.disabled(dictation.draft.isEmpty)
+                        }
+                        Text(dictation.status).font(.callout)
+                        if !dictation.draft.isEmpty { Text(dictation.draft).font(.callout).textSelection(.enabled) }
+                        Text("Password fields, selections, terminal apps, changed focus/caret, multiline/control text or unsupported apps are rejected; draft remains for explicit Copy. Dictation is not saved to meeting files. Nothing is typed until a successful final turn; captions and dictation cannot capture simultaneously.").font(.caption).foregroundStyle(.secondary)
+                    }.padding(8).frame(maxWidth: .infinity, alignment: .leading)
+                }
                 GroupBox("3 · Meeting files") {
                     VStack(alignment: .leading, spacing: 10) {
                         Toggle("Save transcript and translation for each meeting", isOn: $preferences.appearance.saveMeetings)
@@ -147,7 +169,7 @@ struct NativeSettings: View {
                     }.padding(8).frame(maxWidth: .infinity, alignment: .leading)
                 }
                 HStack {
-                    Button(worker.running ? "Stop captions" : "Start captions") { if worker.running { worker.stop() } else { start(consent) } }
+                    Button(dictation.active ? "Cancel dictation" : (worker.running ? "Stop captions" : "Start captions")) { if dictation.active { dictation.cancel() } else if worker.running { worker.stop() } else { start(consent) } }
                         .buttonStyle(.borderedProminent).disabled(!worker.running && (meetingFiles.busy || !consent || !credentials.valid || !permissions.canStart(source: preferences.appearance.source)))
                     Button("Show / hide overlay", action: toggleOverlay)
                     Button("Clear text", action: clear).disabled(worker.running)
@@ -181,7 +203,8 @@ struct NativeSettings: View {
             }.padding(24)
         }
         .frame(minWidth: 640, minHeight: 560)
-        .onChange(of: credentials.apiKey) { _, _ in consent = false; pasteFailed = false }
+        .onChange(of: consent) { _, value in if !value { dictation.disarm() } }
+        .onChange(of: credentials.apiKey) { _, _ in consent = false; pasteFailed = false; dictation.disarm() }
         .onChange(of: preferences.appearance.source) { _, _ in consent = false; permissions.refresh() }
         .onChange(of: preferences.appearance.target) { _, _ in consent = false }
         .onChange(of: preferences.appearance.saveMeetings) { _, _ in consent = false }

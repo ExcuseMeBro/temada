@@ -35,6 +35,11 @@ pub struct Config {
 fn setup(target: &str) -> Value {
     json!({"setup": {"model": format!("models/{MODEL}"), "generationConfig": {"responseModalities": ["AUDIO"], "translationConfig": {"targetLanguageCode": target, "echoTargetLanguage": true}}, "inputAudioTranscription": {}, "outputAudioTranscription": {}}})
 }
+fn dictation_setup() -> Value {
+    let mut value = setup("en");
+    value["setup"]["realtimeInputConfig"] = json!({"automaticActivityDetection":{"disabled":true}});
+    value
+}
 fn audio(line: &str) -> Result<Value, String> {
     let b64 = line
         .strip_prefix("PCM:")
@@ -102,15 +107,17 @@ async fn source(
     stop: &AtomicBool,
     failed: &AtomicBool,
     tx: &SyncSender<Event>,
+    finish: Option<&AtomicBool>,
 ) -> Result<(), String> {
     if stop.load(Ordering::Relaxed) || failed.load(Ordering::Relaxed) {
         return Ok(());
     }
-    source_at(config, name, stop, failed, tx, ENDPOINT).await
+    source_at(config, name, stop, failed, tx, ENDPOINT, finish).await
 }
 async fn connect_setup(
     config: &Config,
     endpoint: &str,
+    dictation: bool,
 ) -> Result<
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
     String,
@@ -174,9 +181,17 @@ async fn connect_setup(
     .map_err(|_| "Live TLS/WebSocket handshake failed. Check network and API access")?;
     #[cfg(test)]
     eprintln!("LIVE_PHASE: TLS/WebSocket connected");
-    ws.send(Message::Text(setup(&config.target).to_string().into()))
-        .await
-        .map_err(|_| "Cannot send Live setup")?;
+    ws.send(Message::Text(
+        if dictation {
+            dictation_setup()
+        } else {
+            setup(&config.target)
+        }
+        .to_string()
+        .into(),
+    ))
+    .await
+    .map_err(|_| "Cannot send Live setup")?;
     #[cfg(test)]
     eprintln!("LIVE_PHASE: setup sent");
     loop {
@@ -206,13 +221,27 @@ async fn source_at(
     failed: &AtomicBool,
     tx: &SyncSender<Event>,
     endpoint: &str,
+    finish: Option<&AtomicBool>,
 ) -> Result<(), String> {
-    let connect = connect_setup(config, endpoint);
+    let connect = connect_setup(config, endpoint, finish.is_some());
     let mut check = interval(Duration::from_millis(50));
     let mut ws = tokio::select! {
         result = timeout(Duration::from_secs(12), connect) => result.map_err(|_| "Live setup timed out (12s)")??,
         _ = async { loop { check.tick().await; if stop.load(Ordering::Relaxed) || failed.load(Ordering::Relaxed) { break; } } } => return Ok(()),
     };
+    if finish.is_some() {
+        timeout(
+            Duration::from_secs(2),
+            ws.send(Message::Text(
+                json!({"realtimeInput":{"activityStart":{}}})
+                    .to_string()
+                    .into(),
+            )),
+        )
+        .await
+        .map_err(|_| "Dictation activity start timed out")?
+        .map_err(|_| "Dictation activity start failed")?;
+    }
     let dir = tempfile::tempdir().map_err(|_| "Cannot create private capture workspace")?;
     let mut child = Command::new(&config.helper)
         .arg(dir.path())
@@ -231,6 +260,7 @@ async fn source_at(
     let begin = Instant::now();
     let mut last_audio = Instant::now();
     let mut last_server = Instant::now();
+    let mut finishing: Option<Instant> = None;
     let mut heartbeat = interval(Duration::from_secs(20));
     heartbeat.set_missed_tick_behavior(MissedTickBehavior::Skip);
     let result = async {
@@ -239,13 +269,33 @@ async fn source_at(
                 _ = check.tick() => {
                     if stop.load(Ordering::Relaxed) || failed.load(Ordering::Relaxed) { return Ok(()); }
                     if begin.elapsed() > Duration::from_secs(600) { return Err("10-minute safety session limit reached. Restart explicitly to continue.".into()); }
-                    if last_audio.elapsed() > Duration::from_secs(20) { return Err("No capture frames for 20s. Check audio permission/device and restart.".into()); }
+                    if finish.is_some() && finishing.is_none() && begin.elapsed() > Duration::from_secs(60) { return Err("Dictation 60-second limit reached; draft retained, nothing inserted".into()); }
+                    if finishing.is_none() && finish.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+                        let _ = child.kill().await;
+                        let _ = child.wait().await;
+                        // Flush already-emitted capture frames BEFORE end-of-stream.
+                        // Bound the entire drain, not just individual sends.
+                        timeout(Duration::from_secs(2), async {
+                            let mut count = 0;
+                            while let Some(line) = lines.next_line().await.map_err(|_| "Dictation capture drain failed")? {
+                                count += 1;
+                                if count > 32 { return Err("Dictation capture backlog too large; nothing inserted"); }
+                                let frame = audio(&line).map_err(|_| "Invalid final capture frame")?;
+                                ws.send(Message::Text(frame.to_string().into())).await.map_err(|_| "Dictation final audio upload failed")?;
+                            }
+                            Ok::<(), &str>(())
+                        }).await.map_err(|_| "Dictation capture drain timed out")??;
+                        timeout(Duration::from_secs(2), ws.send(Message::Text(json!({"realtimeInput":{"activityEnd":{}}}).to_string().into()))).await.map_err(|_| "Dictation finish send timed out")?.map_err(|_| "Dictation finish send failed")?;
+                        finishing = Some(Instant::now());
+                    }
+                    if finishing.is_some_and(|at| at.elapsed() > Duration::from_secs(15)) { return Err("Dictation final turn timed out; draft retained, nothing inserted".into()); }
+                    if finishing.is_none() && last_audio.elapsed() > Duration::from_secs(20) { return Err("No capture frames for 20s. Check audio permission/device and restart.".into()); }
                     if last_server.elapsed() > Duration::from_secs(60) { return Err("Live server stopped responding (60s)".into()); }
                 }
                 _ = heartbeat.tick() => {
                     timeout(Duration::from_secs(2), ws.send(Message::Ping(Vec::new().into()))).await.map_err(|_| "Live send stalled")?.map_err(|_| "Live connection lost")?;
                 }
-                line = lines.next_line() => {
+                line = lines.next_line(), if finishing.is_none() => {
                     let line = line.map_err(|_| "Audio capture pipe failed")?.ok_or("Audio capture ended; check macOS permissions")?;
                     if line.starts_with("ERROR:") { return Err(line); }
                     let frame = audio(&line)?;
@@ -260,6 +310,11 @@ async fn source_at(
                             if data.len() > 2_000_000 { return Err("Live response exceeds size limit".into()); }
                             let value: Value = serde_json::from_slice(&data).map_err(|_| "Invalid Live response")?;
                             emit(tx, name, &value)?;
+                            if finishing.is_some() && value["serverContent"]["interrupted"] == true { return Err("Dictation interrupted; draft retained, nothing inserted".into()); }
+                            if value["serverContent"]["turnComplete"] == true {
+                                if finishing.is_some() { return Ok(()); }
+                                if finish.is_some() { return Err("Unexpected early dictation turn; nothing inserted".into()); }
+                            }
                         }
                         Some(Ok(Message::Ping(p))) => {
                             timeout(Duration::from_secs(2), ws.send(Message::Pong(p))).await.map_err(|_| "Live ping stalled")?.map_err(|_| "Live connection lost")?;
@@ -279,6 +334,29 @@ async fn source_at(
     result
 }
 pub fn run(config: Config, stop: Arc<AtomicBool>, tx: SyncSender<Event>) -> Result<(), String> {
+    run_controlled(config, stop, None, tx)
+}
+pub fn run_dictation(
+    config: Config,
+    stop: Arc<AtomicBool>,
+    finish: Arc<AtomicBool>,
+    tx: SyncSender<Event>,
+) -> Result<(), String> {
+    if config.source != "microphone" || config.target != "en" {
+        return Err("Dictation requires microphone and English".into());
+    }
+    let result = run_controlled(config, stop.clone(), Some(finish), tx);
+    if stop.load(Ordering::Relaxed) {
+        return Err("Dictation cancelled; nothing inserted".into());
+    }
+    result
+}
+fn run_controlled(
+    config: Config,
+    stop: Arc<AtomicBool>,
+    finish: Option<Arc<AtomicBool>>,
+    tx: SyncSender<Event>,
+) -> Result<(), String> {
     if config.key.trim().is_empty() {
         return Err("Enter Gemini API key before Start".into());
     }
@@ -293,8 +371,9 @@ pub fn run(config: Config, stop: Arc<AtomicBool>, tx: SyncSender<Event>) -> Resu
         let stop = &stop;
         let failed = &failed;
         let tx = &tx;
+        let finish = finish.as_deref();
         let one = |name| async move {
-            let r = source(config, name, stop, failed, tx).await;
+            let r = source(config, name, stop, failed, tx, finish).await;
             if r.is_err() {
                 failed.store(true, Ordering::Relaxed);
             }
@@ -311,6 +390,156 @@ pub fn run(config: Config, stop: Arc<AtomicBool>, tx: SyncSender<Event>) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+    async fn dictation_mock(outcome: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let helper = dir.path().join("capture-test");
+        let pidfile = dir.path().join("pid");
+        std::fs::write(&helper, format!("#!/bin/sh\necho $$ > '{}'\nprintf 'PCM:AAABAA==\\nPCM:AAABAA==\\n'\nexec /bin/sleep 30\n", pidfile.display())).unwrap();
+        std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("ws://{}", listener.local_addr().unwrap());
+        let config = Config {
+            key: "fixture-only".into(),
+            target: "en".into(),
+            source: "microphone".into(),
+            helper,
+        };
+        let stop = AtomicBool::new(false);
+        let failed = AtomicBool::new(false);
+        let finish = AtomicBool::new(false);
+        let (tx, rx) = std::sync::mpsc::sync_channel(8);
+        let server = async {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(socket).await.unwrap();
+            let setup_frame = ws.next().await.unwrap().unwrap().into_text().unwrap();
+            assert_eq!(
+                serde_json::from_str::<Value>(&setup_frame).unwrap(),
+                dictation_setup()
+            );
+            ws.send(Message::Binary(
+                json!({"setupComplete":{}}).to_string().into_bytes().into(),
+            ))
+            .await
+            .unwrap();
+            let mut audio_count = 0;
+            while let Some(Ok(frame)) = ws.next().await {
+                match frame {
+                    Message::Text(s) => {
+                        let value: Value = serde_json::from_str(&s).unwrap();
+                        if value["realtimeInput"]["activityEnd"].is_object() {
+                            assert!(audio_count >= 2, "End sent before pending audio drain");
+                            let response = json!({"serverContent":{"outputTranscription":{"text":"Hello world."},"turnComplete":outcome == "complete", "interrupted":outcome == "interrupted"}});
+                            ws.send(Message::Binary(response.to_string().into_bytes().into()))
+                                .await
+                                .unwrap();
+                        } else if value["realtimeInput"]["activityStart"].is_object() {
+                            assert_eq!(audio_count, 0);
+                        } else {
+                            assert!(value["realtimeInput"]["audio"].is_object());
+                            audio_count += 1;
+                            if outcome == "cancel" {
+                                stop.store(true, Ordering::Relaxed);
+                            } else if outcome == "early" {
+                                if audio_count == 1 {
+                                    ws.send(Message::Binary(
+                                        json!({"serverContent":{"turnComplete":true}})
+                                            .to_string()
+                                            .into_bytes()
+                                            .into(),
+                                    ))
+                                    .await
+                                    .unwrap();
+                                }
+                            } else {
+                                finish.store(true, Ordering::Relaxed);
+                            }
+                        }
+                    }
+                    Message::Ping(p) => {
+                        let _ = ws.send(Message::Pong(p)).await;
+                    }
+                    Message::Close(_) => break,
+                    _ => {}
+                }
+            }
+        };
+        let (result, _) = timeout(Duration::from_secs(22), async {
+            tokio::join!(
+                source_at(
+                    &config,
+                    "microphone",
+                    &stop,
+                    &failed,
+                    &tx,
+                    &endpoint,
+                    Some(&finish)
+                ),
+                server
+            )
+        })
+        .await
+        .unwrap();
+        match outcome {
+            "timeout" => assert!(result.unwrap_err().contains("final turn timed out")),
+            "interrupted" => assert!(result.unwrap_err().contains("interrupted")),
+            "early" => assert!(result.unwrap_err().contains("early dictation turn")),
+            _ => assert!(result.is_ok()),
+        }
+        let events: Vec<_> = rx.try_iter().collect();
+        if !["cancel", "early"].contains(&outcome) {
+            assert!(events.iter().any(
+                |event| matches!(event, Event::Live(_,_,Some(text),_) if text == "Hello world.")
+            ));
+        }
+        let pid = std::fs::read_to_string(pidfile).unwrap();
+        assert!(
+            !std::process::Command::new("/bin/kill")
+                .args(["-0", pid.trim()])
+                .stderr(Stdio::null())
+                .status()
+                .unwrap()
+                .success(),
+            "Owned capture helper leaked"
+        );
+    }
+    #[tokio::test]
+    async fn dictation_finish_drains_audio_and_final_binary_turn() {
+        dictation_mock("complete").await;
+    }
+    #[tokio::test]
+    async fn dictation_missing_final_turn_times_out_and_reaps() {
+        dictation_mock("timeout").await;
+    }
+    #[tokio::test]
+    async fn dictation_cancel_reaps_without_final_translation() {
+        dictation_mock("cancel").await;
+    }
+    #[tokio::test]
+    async fn dictation_interrupted_turn_is_not_success() {
+        dictation_mock("interrupted").await;
+    }
+    #[tokio::test]
+    async fn dictation_early_turn_is_not_success() {
+        dictation_mock("early").await;
+    }
+    #[test]
+    fn dictation_stop_is_never_success() {
+        let config = Config {
+            key: "fixture-only".into(),
+            target: "en".into(),
+            source: "microphone".into(),
+            helper: PathBuf::new(),
+        };
+        assert!(run_dictation(
+            config,
+            Arc::new(AtomicBool::new(true)),
+            Arc::new(AtomicBool::new(false)),
+            std::sync::mpsc::sync_channel(4).0
+        )
+        .unwrap_err()
+        .contains("cancelled"));
+    }
     #[test]
     fn uzbek_setup_has_both_transcripts() {
         let v = setup("uz");
@@ -406,7 +635,7 @@ mod tests {
         };
         timeout(Duration::from_secs(4), async {
             let (result, _, _) = tokio::join!(
-                source_at(&config, "system", &stop, &failed, &tx, &endpoint),
+                source_at(&config, "system", &stop, &failed, &tx, &endpoint, None),
                 server,
                 ui
             );
@@ -437,10 +666,13 @@ mod tests {
             source: "system".into(),
             helper: PathBuf::new(),
         };
-        let mut ws = timeout(Duration::from_secs(12), connect_setup(&config, ENDPOINT))
-            .await
-            .expect("Setup timeout")
-            .expect("Live setup failed (details hidden)");
+        let mut ws = timeout(
+            Duration::from_secs(12),
+            connect_setup(&config, ENDPOINT, false),
+        )
+        .await
+        .expect("Setup timeout")
+        .expect("Live setup failed (details hidden)");
         let _ = timeout(Duration::from_secs(1), ws.close(None)).await;
         // Never spawn capture, send audio, play generated audio, or change billing.
     }

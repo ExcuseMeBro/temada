@@ -52,6 +52,8 @@ final class FrameReader: @unchecked Sendable {
 struct WorkerCompletionGate {
     var exitCode: Int32?
     var readerEnded = false
+    var cancelled = false
+    func allowsSuccess(_ code: Int32) -> Bool { code == 0 && !cancelled }
     mutating func takeCompletedStatus() -> Int32? {
         guard readerEnded, let code = exitCode else { return nil }
         exitCode = nil; return code
@@ -66,8 +68,9 @@ struct WorkerCompletionGate {
     private var completion = WorkerCompletionGate()
     var onFrames: (([WireFrame]) -> Void)?
     var onStopped: (() -> Void)?
-    static func arguments(appearance: Appearance) -> [String] {
-        ["--native-worker", "--cloud-consent", "--source", appearance.source, "--target", appearance.target]
+    private(set) var completedCleanly = false
+    static func arguments(appearance: Appearance, dictation: Bool = false) -> [String] {
+        ["--native-worker", "--cloud-consent", "--source", appearance.source, "--target", appearance.target] + (dictation ? ["--dictation"] : [])
     }
     static func sendBootstrap(_ data: Data, to handle: FileHandle) throws {
         // A failed child must not SIGPIPE-kill the UI while credentials are sent.
@@ -75,16 +78,16 @@ struct WorkerCompletionGate {
         try handle.write(contentsOf: data)
     }
     private enum BootstrapError: Error { case pipe }
-    func start(appearance: Appearance, credentials: APICredentials, consent: Bool) {
+    func start(appearance: Appearance, credentials: APICredentials, consent: Bool, dictation: Bool = false) {
         guard !running else { return }
         guard consent else { status = "Cloud/cost consent is required."; return }
         guard let bootstrap = try? credentials.bootstrap(consent: consent) else { status = "Enter a valid Gemini API key before Start."; return }
         guard let folder = Bundle.main.executableURL?.deletingLastPathComponent() else { status = "App bundle unavailable."; return }
         let task = Process(), stdin = Pipe(), stdout = Pipe()
         task.executableURL = folder.appendingPathComponent("meeting-captions")
-        task.arguments = Self.arguments(appearance: appearance)
+        task.arguments = Self.arguments(appearance: appearance, dictation: dictation)
         task.standardInput = stdin; task.standardOutput = stdout; task.standardError = FileHandle.nullDevice
-        let id = UUID(); generation = id; completion = WorkerCompletionGate()
+        let id = UUID(); generation = id; completion = WorkerCompletionGate(); completedCleanly = false
         task.terminationHandler = { [weak self] task in
             let code = task.terminationStatus
             DispatchQueue.main.async { [weak self] in
@@ -100,7 +103,7 @@ struct WorkerCompletionGate {
             FrameReader(stdout.fileHandleForReading, deliver: { [weak self] frames in
                 guard let self, self.generation == id else { return }
                 for frame in frames {
-                    if frame.kind == "error" { self.status = "Error: \(frame.message ?? "Streaming failed")" }
+                    if frame.kind == "error" { self.completion.cancelled = true; self.status = "Error: \(frame.message ?? "Streaming failed")" }
                     else if frame.kind == "status" { self.status = frame.message ?? "Streaming" }
                 }
                 self.onFrames?(frames)
@@ -120,14 +123,21 @@ struct WorkerCompletionGate {
     }
     private func finishIfDrained() {
         guard let code = completion.takeCompletedStatus() else { return }
+        completedCleanly = completion.allowsSuccess(code) && !status.hasPrefix("Error:")
         running = false; process = nil
         try? input?.close(); input = nil
         if code != 0 && !status.hasPrefix("Error:") { status = "Worker stopped (\(code)); check API key, quota and permissions." }
         else if !status.hasPrefix("Error:") { status = "Stopped. Pending audio/text may have been discarded." }
         onStopped?()
     }
+    func finishDictation() {
+        guard running, let input else { return }
+        do { try Self.sendBootstrap(Data("FINISH\n".utf8), to: input) }
+        catch { fail("Cannot finish dictation; nothing will be inserted.") }
+    }
     func stop() {
         guard running else { return }
+        completion.cancelled = true
         if !status.hasPrefix("Error:") { status = "Stopping…" }
         try? input?.close(); input = nil
         // EOF cancels only the owned worker; never signal another app/session.

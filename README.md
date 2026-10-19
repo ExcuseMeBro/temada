@@ -45,7 +45,8 @@ against that app while it is active.
   four edges/four corners (8pt edges, forgiving16pt corner targets). AppKit handles
   events before SwiftUI, so text/ScrollView cannot swallow the native window drag.
   Resize keeps the opposite edge fixed and clamps to340×140…1800×1200pt. Scroll-wheel
-  text scrolling is unchanged; no global input monitors/Accessibility permission.
+  text scrolling is unchanged. Caption dragging needs no global input monitors or
+  Accessibility permission; cursor dictation below does require Accessibility.
   Appearance,
   position, dimensions and source/target persist in UserDefaults.
 - Enter the Gemini API key in the masked **API key** field, not a file chooser.
@@ -112,6 +113,46 @@ JSON escaping and boundary ordering/backpressure. These do not prove actual nati
 window interactions, device capture, semantic translation alignment or smoothness.
 Live native UI/Meet/Zoom/TCC checks and comparable CPU/memory/frame-time measurements
 remain manual acceptance; native technology alone is not a performance guarantee.
+
+## Uzbek speech → English at the cursor (native Temada 0.5.0)
+
+Settings → **Uzbek → English at your cursor · ⌘Space**. Enter an API key, give
+fresh cloud/cost consent, grant Microphone and Accessibility explicitly, then
+**Enable ⌘Space** for this launch only. Registration fails visibly if another
+shortcut owns the combination; the app never edits Spotlight settings itself.
+Focus an editable text caret in another app, press ⌘Space, **wait for the microphone
+indicator/Listening status**, speak Uzbek, then press ⌘Space again to finish.
+Connection setup can delay recording; no measured latency or perfect-English claim.
+
+Uses the same Gemini Live Translate model, English target, microphone only; no
+model download or subscription workaround. Automatic activity detection is disabled
+only in this dictation session: explicit activityStart/activityEnd delimit one turn.
+The second press stops/reaps the owned helper, drains its bounded remaining PCM,
+sends activityEnd, and waits up to 15s for a successful final server turn and full
+worker-output delivery. Recording is capped at 60s; limits/errors/cancellation,
+interruption, unexpected early turns or an empty draft never trigger insertion.
+Cancel dictation, Disable, tray Stop, consent/key changes and Quit cancel; a Stop
+racing a successful process exit is latched and cannot become a clean insertion.
+Meeting capture and dictation cannot run simultaneously. No automatic retry/fallback.
+
+Insertion uses AXSelectedText at the captured, still-focused caret: same app,
+AX element, role and selection range, editable zero-length selection only. It does
+not read field contents, monitor keystrokes, replace an entire field, synthesize
+Paste/Return events or automatically touch the clipboard. Known terminal apps,
+password/protected fields, changed focus/caret, unknown/unsupported apps and
+multiline/control-character drafts are rejected. Application AX support varies;
+these metadata checks are not an atomic OS-wide focus lock. No app-specific
+behavior or universal insertion support has been verified. Draft stays in memory
+for **Copy English draft**, an explicit clipboard action. The first capture can
+miss words spoken before connection completes; wait for readiness.
+
+Dictation drafts are launch-only, bounded at 16,000 UTF-8 bytes per original/English
+stream, and are NOT included in meeting files or caption scrollback. API audio and
+generated-audio charges still apply, even though output audio is discarded. Granting
+Accessibility/arming alone starts no capture or network connection. Nothing starts
+until a manual hotkey press. Actual account/model manual-activity support, TCC,
+⌘Space routing, microphone quality, real target-app insertion and latency remain
+manual acceptance; unit/mock tests are not proof of these.
 
 ## Meeting files (native Temada)
 

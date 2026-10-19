@@ -9,6 +9,7 @@ import Combine
     let permissions = RecordingPermissions()
     let credentials = APICredentials()
     let meetingFiles = MeetingFiles()
+    let dictation = EnglishDictation()
     private var statusItem: NSStatusItem!
     private var overlay: NSPanel!
     private var settings: NSWindow?
@@ -35,13 +36,20 @@ import Combine
         createMenu()
         preferences.$appearance.debounce(for: .milliseconds(60), scheduler: RunLoop.main).sink { [weak self] value in self?.applyFrame(value, restorePosition: false) }.store(in: &observers)
         worker.$running.sink { [weak self] running in
-            self?.startItem.title = running ? "Stop captions" : "Start captions…"
+            self?.startItem.title = running ? (self?.dictation.active == true ? "Cancel dictation" : "Stop captions") : "Start captions…"
             self?.statusItem.button?.image = self?.menuImage(running: running)
-            self?.statusItem.button?.toolTip = running ? "Temada · Captions running" : "Temada"
+            self?.statusItem.button?.toolTip = running ? (self?.dictation.active == true ? "Temada · English dictation · ⌘Space to finish" : "Temada · Captions running") : "Temada"
         }.store(in: &observers)
+        dictation.onHotkey = { [weak self] in self?.toggleDictation() }
+        dictation.onCancel = { [weak self] in self?.worker.stop() }
         meetingFiles.onFailure = { [weak self] in self?.worker.fail("Meeting file write failed. Partial files retained.") }
         worker.onFrames = { [weak self] frames in
             guard let self else { return }
+            if self.dictation.active {
+                do { try self.dictation.consume(frames) }
+                catch { self.dictation.cancel(); self.worker.fail("Dictation draft limit/protocol error; nothing inserted.") }
+                return
+            }
             do { try self.meetingFiles.record(frames) }
             catch { self.worker.fail("Meeting save limit/write failure. Partial files retained."); return }
             do { for frame in frames { try self.captions.consume(frame) } }
@@ -49,6 +57,7 @@ import Combine
         }
         worker.onStopped = { [weak self] in
             guard let self else { return }
+            if self.dictation.active { self.dictation.completed(cleanly: self.worker.completedCleanly && !self.pendingQuit) }
             self.finishMeeting()
         }
         // Settings are separate from the subtitle panel, never auto-start capture.
@@ -81,7 +90,7 @@ import Combine
     }
     @objc func showSettings() {
         if settings == nil {
-            let view = NativeSettings(preferences: preferences, worker: worker, permissions: permissions, credentials: credentials, meetingFiles: meetingFiles,
+            let view = NativeSettings(preferences: preferences, worker: worker, permissions: permissions, credentials: credentials, meetingFiles: meetingFiles, dictation: dictation,
                 toggleOverlay: { [weak self] in self?.toggleOverlay() }, clear: { [weak self] in self?.clearText() }, start: { [weak self] consent in self?.startCapture(consent: consent) })
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 700, height: 760), styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
             window.title = "Temada — Settings"; window.isReleasedWhenClosed = false
@@ -94,9 +103,24 @@ import Combine
     @objc func compactOverlay() { preferences.useCompactLayout(); overlay.orderFrontRegardless() }
     @objc func clearText() { if !worker.running { captions.clear() } }
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool { menuItem.action != #selector(clearText) || !worker.running }
-    @objc func toggleCapture() { if worker.running { worker.stop() } else { showSettings() } }
+    @objc func toggleCapture() { if dictation.active { dictation.cancel() } else if worker.running { worker.stop() } else { showSettings() } }
+    private func toggleDictation() {
+        guard dictation.armed, !pendingQuit else { return }
+        if dictation.active {
+            if dictation.requestFinish() { worker.finishDictation() }
+            return
+        }
+        guard !worker.running, !meetingFiles.busy, credentials.valid else { return }
+        permissions.refresh()
+        guard permissions.canStart(source: "microphone") else { dictation.disarm(); return }
+        guard dictation.begin() else { return }
+        var config = preferences.appearance; config.source = "microphone"; config.target = "en"
+        worker.start(appearance: config, credentials: credentials, consent: true, dictation: true)
+        if !worker.running { dictation.completed(cleanly: false) }
+    }
     private func startCapture(consent: Bool) {
         guard consent, credentials.valid, !worker.running, !meetingFiles.busy else { return }
+        dictation.disarm()
         permissions.refresh()
         guard permissions.canStart(source: preferences.appearance.source) else { showSettings(); return }
         do { try captions.beginMeeting() }
@@ -120,7 +144,7 @@ import Combine
     @objc func quit() { NSApp.terminate(nil) }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard worker.running || meetingFiles.busy else { return .terminateNow }
-        pendingQuit = true; worker.stop()
+        pendingQuit = true; dictation.disarm(); worker.stop()
         // Never force-kill an uncertain worker; keep app available if cancellation fails.
         DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
             guard let self, self.pendingQuit else { return }
