@@ -35,10 +35,15 @@ import AppKit
                         } else { transparent += 1 }
                     } }
                     require(visible > 10 && transparent > 100, "Empty symbol or opaque square background")
+                    // Independent landmarks from the original Temada artwork:
+                    // two lower tails, two lobes, and the open interlocking gap.
+                    require(bitmap.colorAt(x: 6, y: 28)!.alphaComponent > 0.5 && bitmap.colorAt(x: 30, y: 28)!.alphaComponent > 0.5, "Temada's two speech-bubble tails are missing (generic chat icon)")
+                    require(bitmap.colorAt(x: 18, y: 16)!.alphaComponent < 0.1, "Temada interlocking negative space was filled")
+                    require(bitmap.colorAt(x: 8, y: 14)!.alphaComponent > 0.9 && bitmap.colorAt(x: 28, y: 14)!.alphaComponent > 0.9, "Temada's two brand lobes are missing")
                 }
             }
         }
         require(!logo.isTemplate, "Application logo was mutated into a template")
-        print("STATUS_ICON_SELFTEST: PASS — idle/running18pt template, light/dark monochrome pixels, transparent background; full-color app logo untouched")
+        print("STATUS_ICON_SELFTEST: PASS — Temada interlocking brand/two tails/negative space, idle/running18pt template, light/dark monochrome pixels, transparent background; full-color app logo untouched")
     }
 }

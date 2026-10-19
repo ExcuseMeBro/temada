@@ -36,9 +36,11 @@ unknown identities; certificate keys and trust settings are never modified.
 also rejects cdhash-only requirements and verifies the signed bundle identity. Existing `scripts/build.sh` still builds the OLD app; do not run it
 against that app while it is active.
 
-- Menu-bar icon is an18pt monochrome AppKit template caption bubble, automatically
-  tinted for the menu-bar appearance. Running uses a filled bubble, not a colored
-  badge or square. The application/Finder logo remains full color.
+- Menu-bar icon is an18pt monochrome AppKit template of Temada’s own interlocking
+  speech-bubble logo (not a generic system chat icon), automatically tinted for
+  the menu-bar appearance. Same brand shape in idle/running states; running status
+  stays in the tooltip/menu, with no colored badge or square. The application/Finder
+  logo remains full color. Vector silhouette preserves both tails and central gap.
   Menu actions: Start/Stop, show/hide subtitles, Settings, Quit.
 - Overlay has ONLY original text with translation immediately underneath each row;
   no buttons, status, speaker headings or persistent settings panels. Settings hide
