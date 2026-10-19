@@ -18,6 +18,7 @@ import Combine
     private var pendingQuit = false
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        NSApp.mainMenu = applicationEditingMenu()
         overlay = CaptionPanel(contentRect: NSRect(x: 0, y: 0, width: preferences.appearance.width, height: preferences.appearance.height), styleMask: [.borderless, .resizable, .nonactivatingPanel], backing: .buffered, defer: false)
         overlay.title = "Temada — subtitles"
         overlay.isReleasedWhenClosed = false; overlay.level = .floating

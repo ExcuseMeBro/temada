@@ -1,6 +1,30 @@
 # Temada 0.4.0 / build 3 — candidate evidence
 
-## Latest candidate: compact subtitle overlay
+## Latest candidate: API-key paste / native Edit commands
+
+User reported paste not working in the Google Gemini API-key field. This accessory
+app had no application Edit menu. Added standard responder-chain Edit actions
+(Command-V/X/C/A, Undo/Redo), installed as NSApp.mainMenu. Native secure-field
+masking/automatic action validation remain; no forced copying out of secure text.
+Added an explicit Paste button with whitespace trimming and existing ASCII/1024-byte
+key validation. Clipboard is read only upon explicit paste, never launch/focus;
+invalid/nontext paste preserves the existing key and shows a static error. Key
+changes still revoke cloud consent. No credential logging/storage or real key read.
+
+Regression RED: native suite exited 1 with
+`EDITING_SELFTEST: FAIL — missing responder-chain Paste / Command-V` before menu
+implementation. GREEN: full native suite and release embedded tests PASS, including
+menu selector/key/modifier/nil-target checks and private synthetic pasteboard tests
+(valid/trim/oversized/invalid/empty). User's general clipboard was not accessed by
+tests. Existing permissions/credentials/files/drain/compact/drag-resize/signing and
+brand tests PASS. Strict/deep certificate-signed build PASS; Rust/network/audio
+unchanged. Physical Command-V and real-key entry still require user acceptance.
+Newest candidate: `macos-live/dist/Temada-0.4.0-paste.app` (NOT installed/launched).
+Logs: /tmp/brain-1-temada-paste-red.log, /tmp/brain-1-temada-paste-tests.log,
+/tmp/brain-1-temada-paste-build.log. Installed /Users/bro/Applications/Temada.app
+was not changed/stopped; fresh named quit/update approval is needed.
+
+## Earlier candidate: compact subtitle overlay
 
 User requested a smaller subtitle panel, not just a narrower tray menu.
 Default/preset: 620×190 points, original 17pt / translation 20pt, one pair,

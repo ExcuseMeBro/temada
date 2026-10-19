@@ -6,6 +6,7 @@ import AppKit
         WireFrame(kind: "text", source: source, original: original, translation: translation, inputFinished: inputDone, outputFinished: outputDone)
     }
     static func run() {
+        EditingTests.run()
         PermissionTests.run()
         MeetingFileTests.run()
         var t = CaptionTimeline()

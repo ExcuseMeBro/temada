@@ -65,6 +65,7 @@ struct NativeSettings: View {
     @ObservedObject var credentials: APICredentials
     @ObservedObject var meetingFiles: MeetingFiles
     @State private var consent = false
+    @State private var pasteFailed = false
     var toggleOverlay: () -> Void
     var clear: () -> Void
     var start: (Bool) -> Void
@@ -106,7 +107,12 @@ struct NativeSettings: View {
                             SecureField("Gemini API key", text: $credentials.apiKey)
                                 .textFieldStyle(.roundedBorder)
                                 .accessibilityLabel("Gemini API key")
+                            Button("Paste") { pasteFailed = !credentials.pasteKey(from: .general) }
+                                .help("Paste the copied Google Gemini API key (⌘V also works in the field)")
                             Button("Clear key") { credentials.apiKey = "" }.disabled(credentials.apiKey.isEmpty)
+                        }
+                        if pasteFailed {
+                            Text("Copy a valid API key as plain text, then paste again. Existing key was not changed.").font(.caption).foregroundStyle(.secondary)
                         }
                         Text("API key stays in memory for this launch only. It is not saved; enter it again after quitting Temada.")
                             .font(.caption).foregroundStyle(.secondary)
@@ -176,7 +182,7 @@ struct NativeSettings: View {
             }.padding(24)
         }
         .frame(minWidth: 640, minHeight: 560)
-        .onChange(of: credentials.apiKey) { _, _ in consent = false }
+        .onChange(of: credentials.apiKey) { _, _ in consent = false; pasteFailed = false }
         .onChange(of: preferences.appearance.source) { _, _ in consent = false; permissions.refresh() }
         .onChange(of: preferences.appearance.target) { _, _ in consent = false }
         .onChange(of: preferences.appearance.saveMeetings) { _, _ in consent = false }
