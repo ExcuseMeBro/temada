@@ -8,12 +8,16 @@ final class FrameReader: @unchecked Sendable {
     let handle: FileHandle
     let deliver: @MainActor ([WireFrame]) -> Void
     let failed: @MainActor () -> Void
-    init(_ handle: FileHandle, deliver: @escaping @MainActor ([WireFrame]) -> Void, failed: @escaping @MainActor () -> Void) {
-        self.handle = handle; self.deliver = deliver; self.failed = failed
+    let ended: @MainActor () -> Void
+    init(_ handle: FileHandle, deliver: @escaping @MainActor ([WireFrame]) -> Void, failed: @escaping @MainActor () -> Void, ended: @escaping @MainActor () -> Void = {}) {
+        self.handle = handle; self.deliver = deliver; self.failed = failed; self.ended = ended
     }
     func start() {
         DispatchQueue.global(qos: .userInitiated).async { [self] in
-            defer { try? handle.close() }
+            defer {
+                try? handle.close()
+                DispatchQueue.main.async { MainActor.assumeIsolated { self.ended() } }
+            }
             do {
                 var buffer = Data()
                 while true {
@@ -43,12 +47,23 @@ final class FrameReader: @unchecked Sendable {
     }
     enum ReaderError: Error { case oversize, protocolError }
 }
+// A child may exit before its final stdout frames reach the UI/journal.
+// Finalize only after BOTH process exit and fully drained reader (in either order).
+struct WorkerCompletionGate {
+    var exitCode: Int32?
+    var readerEnded = false
+    mutating func takeCompletedStatus() -> Int32? {
+        guard readerEnded, let code = exitCode else { return nil }
+        exitCode = nil; return code
+    }
+}
 @MainActor final class StreamingWorker: ObservableObject {
     @Published private(set) var running = false
     @Published private(set) var status = "Ready — choose audio, consent, then Start."
     private var process: Process?
     private var input: FileHandle?
     private var generation = UUID()
+    private var completion = WorkerCompletionGate()
     var onFrames: (([WireFrame]) -> Void)?
     var onStopped: (() -> Void)?
     static func arguments(appearance: Appearance) -> [String] {
@@ -69,16 +84,12 @@ final class FrameReader: @unchecked Sendable {
         task.executableURL = folder.appendingPathComponent("meeting-captions")
         task.arguments = Self.arguments(appearance: appearance)
         task.standardInput = stdin; task.standardOutput = stdout; task.standardError = FileHandle.nullDevice
-        let id = UUID(); generation = id
+        let id = UUID(); generation = id; completion = WorkerCompletionGate()
         task.terminationHandler = { [weak self] task in
             let code = task.terminationStatus
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.generation == id else { return }
-                self.running = false; self.process = nil
-                try? self.input?.close(); self.input = nil
-                if code != 0 && !self.status.hasPrefix("Error:") { self.status = "Worker stopped (\(code)); check API key, quota and permissions." }
-                else if !self.status.hasPrefix("Error:") { self.status = "Stopped. Pending audio/text may have been discarded." }
-                self.onStopped?()
+                self.completion.exitCode = code; self.finishIfDrained()
             }
         }
         do {
@@ -96,6 +107,9 @@ final class FrameReader: @unchecked Sendable {
             }, failed: { [weak self] in
                 guard let self, self.generation == id else { return }
                 self.fail("Invalid or oversized worker response; stopped.")
+            }, ended: { [weak self] in
+                guard let self, self.generation == id else { return }
+                self.completion.readerEnded = true; self.finishIfDrained()
             }).start()
             do { try Self.sendBootstrap(bootstrap, to: stdin.fileHandleForWriting) }
             catch { fail("Cannot send API credentials to owned worker; stopped.") }
@@ -103,6 +117,14 @@ final class FrameReader: @unchecked Sendable {
             try? stdin.fileHandleForWriting.close(); try? stdout.fileHandleForReading.close()
             status = "Cannot start bundled worker. Rebuild the native app."; running = false
         }
+    }
+    private func finishIfDrained() {
+        guard let code = completion.takeCompletedStatus() else { return }
+        running = false; process = nil
+        try? input?.close(); input = nil
+        if code != 0 && !status.hasPrefix("Error:") { status = "Worker stopped (\(code)); check API key, quota and permissions." }
+        else if !status.hasPrefix("Error:") { status = "Stopped. Pending audio/text may have been discarded." }
+        onStopped?()
     }
     func stop() {
         guard running else { return }

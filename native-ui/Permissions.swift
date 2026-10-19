@@ -55,7 +55,7 @@ enum AppIdentity {
     func refresh() {
         screenGranted = backend.screenAllowed()
         microphoneGranted = backend.microphoneStatus() == .authorized
-        if !certificateSigned { message = "Unsigned test build. Open the certificate-signed MCLBB.app; access requests and capture are disabled here." }
+        if !certificateSigned { message = "Unsigned test build. Open the certificate-signed Temada.app; access requests and capture are disabled here." }
     }
     func canStart(source: String) -> Bool {
         guard certificateSigned else { return false }
@@ -91,7 +91,7 @@ enum AppIdentity {
         } else { message = "Required macOS access is ready. Confirm cloud consent, then Start captions." }
     }
     private var settingsHint: String {
-        "Open Privacy Settings and enable MCLBB (not Native v2/v3/v4). If macOS requires a restart, quit and reopen MCLBB yourself. No permission resets are performed."
+        "Open Privacy Settings and enable Temada (older entries may say MCLBB; not Native v2/v3/v4). If macOS requires a restart, quit and reopen Temada yourself. No permission resets are performed."
     }
     private func showSettingsHint() { message = settingsHint }
     func openSettings(source: String) {

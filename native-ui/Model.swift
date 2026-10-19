@@ -14,6 +14,8 @@ struct Appearance: Codable, Equatable {
     var y: Double?
     var visiblePairs = 4
     var animations = true
+    var saveMeetings = true
+    var meetingFolder = (FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")).appendingPathComponent("Temada/Meetings").path
     var source = "system"
     var target = "uz"
     mutating func clamp() {
@@ -35,11 +37,19 @@ struct Appearance: Codable, Equatable {
     @Published var appearance: Appearance { didSet { if let data = try? JSONEncoder().encode(appearance) { defaults.set(data, forKey: "appearance.v1") } } }
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        var value = defaults.data(forKey: "appearance.v1").flatMap { try? JSONDecoder().decode(Appearance.self, from: $0) } ?? Appearance()
+        // Merge newly added defaults without discarding an older saved appearance.
+        var value = Appearance()
+        if let data = defaults.data(forKey: "appearance.v1"),
+           let saved = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let baselineData = try? JSONEncoder().encode(value),
+           var merged = try? JSONSerialization.jsonObject(with: baselineData) as? [String: Any] {
+            merged.merge(saved) { _, saved in saved }
+            if let combined = try? JSONSerialization.data(withJSONObject: merged), let decoded = try? JSONDecoder().decode(Appearance.self, from: combined) { value = decoded }
+        }
         value.clamp(); self.appearance = value
     }
 }
-struct WireFrame: Decodable {
+struct WireFrame: Codable {
     var kind: String
     var source: String?
     var original: String?

@@ -17,8 +17,8 @@ done
 if "$TMP/native-test" --verify-identity > "$TMP/unsigned.log" 2>&1; then
   printf 'Unsigned executable passed bundle identity check\n' >&2; exit 1
 fi
-swift scripts/AppIcon.swift "$TMP/MCLBB.iconset"
-iconutil -c icns "$TMP/MCLBB.iconset" -o "$TMP/MCLBB.icns"
-[[ -s "$TMP/MCLBB.icns" ]]
+swift scripts/AppIcon.swift "$TMP/Temada.iconset"
+iconutil -c icns "$TMP/Temada.iconset" -o "$TMP/Temada.icns"
+[[ -s "$TMP/Temada.icns" ]]
 printf 'Signing guards + unsigned bundle rejection + brand icon: PASS\n'
 printf 'Native SwiftUI/AppKit compile + synthetic state/settings/IPC checks: PASS\n'

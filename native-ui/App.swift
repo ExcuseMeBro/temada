@@ -8,6 +8,7 @@ import Combine
     let worker = StreamingWorker()
     let permissions = RecordingPermissions()
     let credentials = APICredentials()
+    let meetingFiles = MeetingFiles()
     private var statusItem: NSStatusItem!
     private var overlay: NSPanel!
     private var settings: NSWindow?
@@ -19,7 +20,7 @@ import Combine
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         overlay = CaptionPanel(contentRect: NSRect(x: 0, y: 0, width: preferences.appearance.width, height: preferences.appearance.height), styleMask: [.borderless, .resizable, .nonactivatingPanel], backing: .buffered, defer: false)
-        overlay.title = "MCLBB — subtitles"
+        overlay.title = "Temada — subtitles"
         overlay.isReleasedWhenClosed = false; overlay.level = .floating
         overlay.isOpaque = false; overlay.backgroundColor = .clear; overlay.hasShadow = true
         overlay.isMovableByWindowBackground = true; overlay.hidesOnDeactivate = false
@@ -35,24 +36,29 @@ import Combine
         preferences.$appearance.debounce(for: .milliseconds(60), scheduler: RunLoop.main).sink { [weak self] value in self?.applyFrame(value, restorePosition: false) }.store(in: &observers)
         worker.$running.sink { [weak self] running in
             self?.startItem.title = running ? "Stop captions" : "Start captions…"
-            self?.statusItem.button?.image = NSImage(systemSymbolName: running ? "captions.bubble.fill" : "captions.bubble", accessibilityDescription: running ? "MCLBB streaming" : "MCLBB")
+            self?.statusItem.button?.image = self?.menuImage(running: running)
+            self?.statusItem.button?.toolTip = running ? "Temada · Captions running" : "Temada"
         }.store(in: &observers)
         worker.$status.sink { [weak self] message in self?.statusMenuItem.title = String(message.prefix(90)) }.store(in: &observers)
+        meetingFiles.onFailure = { [weak self] in self?.worker.fail("Meeting file write failed. Partial files retained.") }
         worker.onFrames = { [weak self] frames in
             guard let self else { return }
+            do { try self.meetingFiles.record(frames) }
+            catch { self.worker.fail("Meeting save limit/write failure. Partial files retained."); return }
             do { for frame in frames { try self.captions.consume(frame) } }
             catch { self.worker.fail("Caption alignment/size limit reached. Stop and clear before restarting.") }
         }
         worker.onStopped = { [weak self] in
             guard let self else { return }
-            if self.pendingQuit { self.pendingQuit = false; NSApp.reply(toApplicationShouldTerminate: true) }
+            self.finishMeeting()
         }
         // Settings are separate from the subtitle panel, never auto-start capture.
         showSettings()
     }
     private func createMenu() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        statusItem.button?.image = NSImage(systemSymbolName: "captions.bubble", accessibilityDescription: "MCLBB")
+        statusItem.button?.image = menuImage(running: false)
+        statusItem.button?.toolTip = "Temada"
         let menu = NSMenu()
         statusMenuItem = NSMenuItem(title: "Ready", action: nil, keyEquivalent: ""); statusMenuItem.isEnabled = false; menu.addItem(statusMenuItem)
         menu.addItem(.separator())
@@ -60,18 +66,26 @@ import Combine
         menu.addItem(item("Show / hide subtitles", #selector(toggleOverlay), key: "h"))
         menu.addItem(item("Clear text", #selector(clearText), key: "k"))
         menu.addItem(item("Settings…", #selector(showSettings), key: ","))
-        menu.addItem(.separator()); menu.addItem(item("Quit MCLBB", #selector(quit), key: "q"))
+        menu.addItem(item("Show last meeting files", #selector(showMeetingFiles), key: "m"))
+        menu.addItem(.separator()); menu.addItem(item("Quit Temada", #selector(quit), key: "q"))
         statusItem.menu = menu
+    }
+    private func menuImage(running: Bool) -> NSImage? {
+        guard let logo = NSImage(named: NSImage.Name("Temada")) else { return NSImage(systemSymbolName: running ? "captions.bubble.fill" : "captions.bubble", accessibilityDescription: "Temada") }
+        let image = NSImage(size: NSSize(width: 20, height: 20))
+        image.lockFocus(); logo.draw(in: NSRect(x: 0, y: 0, width: 20, height: 20))
+        if running { NSColor.systemGreen.setFill(); NSBezierPath(ovalIn: NSRect(x: 15, y: 0, width: 5, height: 5)).fill() }
+        image.unlockFocus(); return image
     }
     private func item(_ title: String, _ action: Selector, key: String) -> NSMenuItem {
         let value = NSMenuItem(title: title, action: action, keyEquivalent: key); value.target = self; return value
     }
     @objc func showSettings() {
         if settings == nil {
-            let view = NativeSettings(preferences: preferences, worker: worker, permissions: permissions, credentials: credentials,
+            let view = NativeSettings(preferences: preferences, worker: worker, permissions: permissions, credentials: credentials, meetingFiles: meetingFiles,
                 toggleOverlay: { [weak self] in self?.toggleOverlay() }, clear: { [weak self] in self?.clearText() }, start: { [weak self] consent in self?.startCapture(consent: consent) })
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 700, height: 760), styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
-            window.title = "MCLBB — Settings"; window.isReleasedWhenClosed = false
+            window.title = "Temada — Settings"; window.isReleasedWhenClosed = false
             window.isRestorable = false // Never archive a window containing API credentials.
             window.contentView = NSHostingView(rootView: view); window.center(); settings = window
         }
@@ -82,16 +96,28 @@ import Combine
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool { menuItem.action != #selector(clearText) || !worker.running }
     @objc func toggleCapture() { if worker.running { worker.stop() } else { showSettings() } }
     private func startCapture(consent: Bool) {
-        guard consent, credentials.valid, !worker.running else { return }
+        guard consent, credentials.valid, !worker.running, !meetingFiles.busy else { return }
         permissions.refresh()
         guard permissions.canStart(source: preferences.appearance.source) else { showSettings(); return }
+        do { try meetingFiles.start(appearance: preferences.appearance) }
+        catch { worker.fail("Cannot create private meeting files. Choose another folder or turn saving off."); return }
         captions.clear(); overlay.orderFrontRegardless()
         worker.start(appearance: preferences.appearance, credentials: credentials, consent: consent)
-        if worker.running { settings?.orderOut(nil) }
+        if worker.running { settings?.orderOut(nil) } else { finishMeeting() }
+    }
+    @objc func showMeetingFiles() { meetingFiles.reveal() }
+    private func finishMeeting() {
+        meetingFiles.finish { [weak self] okay in
+            guard let self else { return }
+            if self.pendingQuit {
+                self.pendingQuit = false; NSApp.reply(toApplicationShouldTerminate: okay)
+                if !okay { self.showSettings() }
+            }
+        }
     }
     @objc func quit() { NSApp.terminate(nil) }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard worker.running else { return .terminateNow }
+        guard worker.running || meetingFiles.busy else { return .terminateNow }
         pendingQuit = true; worker.stop()
         // Never force-kill an uncertain worker; keep app available if cancellation fails.
         DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
@@ -132,8 +158,11 @@ import Combine
     @MainActor static func main() {
         if CommandLine.arguments.contains("--self-test") { NativeTests.run(); return }
         if CommandLine.arguments.contains("--verify-identity") {
-            guard AppIdentity.certificateSigned else { fputs("IDENTITY: FAIL — signed MCLBB bundle required\n", stderr); exit(1) }
-            print("IDENTITY: PASS — certificate-signed dev.bro.mclbb"); return
+            guard AppIdentity.certificateSigned else { fputs("IDENTITY: FAIL — signed Temada bundle required\n", stderr); exit(1) }
+            guard Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String == "Temada",
+                  Bundle.main.object(forInfoDictionaryKey: "CFBundleIconFile") as? String == "Temada",
+                  NSImage(named: NSImage.Name("Temada"))?.isValid == true else { fputs("BRAND: FAIL — Temada name/icon missing\n", stderr); exit(1) }
+            print("IDENTITY: PASS — certificate-signed dev.bro.mclbb; BRAND: PASS — Temada name/icon"); return
         }
         let app = NSApplication.shared
         let delegate = NativeDelegate(); app.delegate = delegate

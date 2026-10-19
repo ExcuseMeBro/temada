@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-APP="${MC_NATIVE_APP:-$PWD/dist/MCLBB.app}"
+APP="${MC_NATIVE_APP:-$PWD/dist/Temada.app}"
 # Pin a specific, user-approved certificate; never silently fall back to ad-hoc.
 IDENTITY=$(printf '%s' "${MC_CODESIGN_IDENTITY:-}" | tr '[:lower:]' '[:upper:]')
 [[ "$IDENTITY" =~ ^[A-F0-9]{40}$ ]] || {
@@ -21,7 +21,7 @@ fi
 mkdir -p "$PWD/dist"
 STAGE=$(mktemp -d "$PWD/dist/.native-build.XXXXXX")
 trap 'rm -rf "$STAGE"' EXIT
-BUNDLE="$STAGE/MCLBB.app"
+BUNDLE="$STAGE/Temada.app"
 mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources"
 cargo build --release --locked
 swiftc -parse-as-library -O native/Capture.swift -o "$BUNDLE/Contents/MacOS/capture-helper" -framework ScreenCaptureKit -framework AVFoundation -framework CoreMedia
@@ -29,8 +29,8 @@ swiftc -parse-as-library -O native-ui/*.swift -o "$BUNDLE/Contents/MacOS/meeting
 cp target/release/meeting-captions "$BUNDLE/Contents/MacOS/meeting-captions"
 cp native-ui/Info.plist "$BUNDLE/Contents/Info.plist"
 "$BUNDLE/Contents/MacOS/meeting-captions-native" --self-test
-swift scripts/AppIcon.swift "$STAGE/MCLBB.iconset"
-iconutil -c icns "$STAGE/MCLBB.iconset" -o "$BUNDLE/Contents/Resources/MCLBB.icns"
+swift scripts/AppIcon.swift "$STAGE/Temada.iconset"
+iconutil -c icns "$STAGE/Temada.iconset" -o "$BUNDLE/Contents/Resources/Temada.icns"
 # Local-only development signing; no timestamp/upload/notarization or trust changes.
 # Keychain prompts, if any, must be approved by the user, never automated.
 codesign --force --timestamp=none --sign "$IDENTITY" "$BUNDLE/Contents/MacOS/capture-helper"
@@ -52,4 +52,4 @@ libc.renamex_np.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
 if libc.renamex_np(os.fsencode(sys.argv[1]), os.fsencode(sys.argv[2]), 4) != 0:
     raise OSError(ctypes.get_errno(), 'Exclusive app rename failed')
 PY
-printf '\nBuilt certificate-signed MCLBB app: %s\nNo app started; no audio/cloud used.\n' "$APP"
+printf '\nBuilt certificate-signed Temada app: %s\nNo app started; no audio/cloud used.\n' "$APP"

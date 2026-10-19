@@ -60,6 +60,7 @@ struct NativeSettings: View {
     @ObservedObject var worker: StreamingWorker
     @ObservedObject var permissions: RecordingPermissions
     @ObservedObject var credentials: APICredentials
+    @ObservedObject var meetingFiles: MeetingFiles
     @State private var consent = false
     var toggleOverlay: () -> Void
     var clear: () -> Void
@@ -71,13 +72,11 @@ struct NativeSettings: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 HStack(spacing: 16) {
-                    Image(systemName: "captions.bubble.fill")
-                        .font(.system(size: 32, weight: .semibold)).foregroundStyle(.mint)
-                        .frame(width: 64, height: 64)
-                        .background(.mint.opacity(0.12), in: RoundedRectangle(cornerRadius: 18))
+                    Image(nsImage: NSImage(named: NSImage.Name("Temada")) ?? NSImage(systemSymbolName: "captions.bubble.fill", accessibilityDescription: "Temada")!)
+                        .resizable().scaledToFit().frame(width: 72, height: 72)
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("MCLBB").font(.system(size: 32, weight: .bold, design: .rounded))
-                        Text("Meeting Captions · Language Barrier Breaker").font(.subheadline).foregroundStyle(.secondary)
+                        Text("Temada").font(.system(size: 32, weight: .bold, design: .rounded))
+                        Text("Meetings, without language barriers").font(.subheadline).foregroundStyle(.secondary)
                         Text("Understand every meeting.   EN / RU / UZ").font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer()
@@ -106,7 +105,7 @@ struct NativeSettings: View {
                                 .accessibilityLabel("Gemini API key")
                             Button("Clear key") { credentials.apiKey = "" }.disabled(credentials.apiKey.isEmpty)
                         }
-                        Text("API key stays in memory for this launch only. It is not saved; enter it again after quitting MCLBB.")
+                        Text("API key stays in memory for this launch only. It is not saved; enter it again after quitting Temada.")
                             .font(.caption).foregroundStyle(.secondary)
                         HStack {
                             Picker("Audio", selection: $preferences.appearance.source) {
@@ -123,9 +122,23 @@ struct NativeSettings: View {
                         Toggle("I consent to cloud audio processing and possible API charges", isOn: $consent)
                     }.padding(8)
                 }.disabled(worker.running)
+                GroupBox("3 · Meeting files") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Toggle("Save transcript and translation for each meeting", isOn: $preferences.appearance.saveMeetings)
+                            .disabled(worker.running || meetingFiles.busy)
+                        Text(preferences.appearance.meetingFolder).font(.caption).textSelection(.enabled)
+                        HStack {
+                            Button("Choose folder…", action: chooseMeetingFolder).disabled(worker.running || meetingFiles.busy)
+                            Button("Show last meeting", action: meetingFiles.reveal).disabled(meetingFiles.lastFolder == nil)
+                        }
+                        Text("Plaintext files stay in the selected folder. No audio recording. Choose a private local folder; a cloud-synced folder can upload these files. Clear text only clears the overlay, not saved meetings.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Text(meetingFiles.status).font(.callout).textSelection(.enabled)
+                    }.padding(8).frame(maxWidth: .infinity, alignment: .leading)
+                }
                 HStack {
                     Button(worker.running ? "Stop captions" : "Start captions") { if worker.running { worker.stop() } else { start(consent) } }
-                        .buttonStyle(.borderedProminent).disabled(!worker.running && (!consent || !credentials.valid || !permissions.canStart(source: preferences.appearance.source)))
+                        .buttonStyle(.borderedProminent).disabled(!worker.running && (meetingFiles.busy || !consent || !credentials.valid || !permissions.canStart(source: preferences.appearance.source)))
                     Button("Show / hide overlay", action: toggleOverlay)
                     Button("Clear text", action: clear).disabled(worker.running)
                 }
@@ -156,7 +169,16 @@ struct NativeSettings: View {
         .onChange(of: credentials.apiKey) { _, _ in consent = false }
         .onChange(of: preferences.appearance.source) { _, _ in consent = false; permissions.refresh() }
         .onChange(of: preferences.appearance.target) { _, _ in consent = false }
+        .onChange(of: preferences.appearance.saveMeetings) { _, _ in consent = false }
+        .onChange(of: preferences.appearance.meetingFolder) { _, _ in consent = false }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in permissions.refresh() }
+    }
+    private func chooseMeetingFolder() {
+        let panel = NSOpenPanel(); panel.canChooseFiles = false; panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false; panel.canCreateDirectories = true
+        panel.message = "Choose a private folder for plaintext meeting transcripts. No audio is recorded."
+        panel.prompt = "Choose folder"
+        if panel.runModal() == .OK, let url = panel.url { preferences.appearance.meetingFolder = url.path }
     }
     private func sizeSlider(_ title: String, value: Binding<Double>, range: ClosedRange<Double>, percentage: Bool = false) -> some View {
         HStack {

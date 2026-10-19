@@ -7,6 +7,7 @@ import AppKit
     }
     static func run() {
         PermissionTests.run()
+        MeetingFileTests.run()
         var t = CaptionTimeline()
         try! t.consume(frame("Hello. Next.", "Salom. Keyingi.", inputDone: true, outputDone: true))
         precondition(t.pairs.count == 2 && t.pairs[0].original == "Hello." && t.pairs[0].translation == "Salom.")
@@ -45,6 +46,11 @@ import AppKit
         prefs.appearance.width = 940; prefs.appearance.x = 30
         let loaded = Preferences(defaults: defaults)
         precondition(loaded.appearance.originalSize == 30 && loaded.appearance.width == 940 && loaded.appearance.translationColor == "#AABBCC" && loaded.appearance.x == 30)
+        let older = try! JSONSerialization.jsonObject(with: JSONEncoder().encode(prefs.appearance)) as! [String: Any]
+        var olderFields = older; olderFields.removeValue(forKey: "saveMeetings"); olderFields.removeValue(forKey: "meetingFolder")
+        defaults.set(try! JSONSerialization.data(withJSONObject: olderFields), forKey: "appearance.v1")
+        let migrated = Preferences(defaults: defaults)
+        precondition(migrated.appearance.originalSize == 30 && migrated.appearance.width == 940 && migrated.appearance.x == 30 && migrated.appearance.saveMeetings && migrated.appearance.meetingFolder.hasSuffix("Temada/Meetings"), "Older appearance lost during new settings migration")
         var bad = Appearance(); bad.width = -20; bad.originalSize = .nan; bad.opacity = 8; bad.originalColor = "bad"; bad.visiblePairs = 999; bad.clamp()
         precondition(bad.width == 340 && bad.originalSize == 21 && bad.opacity == 1 && bad.visiblePairs == 12 && Appearance.isColor(bad.originalColor))
         let json = try! JSONEncoder().encode(prefs.appearance)
@@ -89,13 +95,22 @@ import AppKit
         panel.setFrame(NSRect(x: 0, y: 0, width: 820, height: 330), display: false)
         hosting.layoutSubtreeIfNeeded()
         let pipe = Pipe()
-        var delivered = false, pipeFailed = false
-        FrameReader(pipe.fileHandleForReading, deliver: { frames in delivered = frames.first?.message == "fixture" }, failed: { pipeFailed = true }).start()
+        var exitFirst = WorkerCompletionGate(); exitFirst.exitCode = 0
+        precondition(exitFirst.takeCompletedStatus() == nil)
+        exitFirst.readerEnded = true; precondition(exitFirst.takeCompletedStatus() == 0 && exitFirst.takeCompletedStatus() == nil)
+        var eofFirst = WorkerCompletionGate(); eofFirst.readerEnded = true
+        precondition(eofFirst.takeCompletedStatus() == nil)
+        eofFirst.exitCode = 7; precondition(eofFirst.takeCompletedStatus() == 7 && eofFirst.takeCompletedStatus() == nil)
+        var delivered = false, pipeFailed = false, readerEnded = false
+        FrameReader(pipe.fileHandleForReading, deliver: { frames in delivered = frames.first?.message == "fixture" }, failed: { pipeFailed = true }, ended: { precondition(delivered); readerEnded = true; CFRunLoopStop(CFRunLoopGetMain()) }).start()
         try! pipe.fileHandleForWriting.write(contentsOf: Data("{\"kind\":\"status\",\"message\":\"fixture\"}\n".utf8))
         // Keep writer OPEN: a short caption must arrive without filling a 16KiB read.
         RunLoop.main.run(until: Date().addingTimeInterval(1))
-        precondition(delivered && !pipeFailed, "Short IPC frame buffered until EOF")
+        precondition(delivered && !pipeFailed && !readerEnded, "Short IPC frame buffered until EOF")
         try! pipe.fileHandleForWriting.close()
+        CFRunLoopRunInMode(.defaultMode, 5, false)
+        precondition(readerEnded && !pipeFailed, "Reader EOF lost before meeting finalization")
+        print("DRAIN_GATE_SELFTEST: PASS — exit/EOF both orders, exactly-once completion, final frame before EOF")
         precondition(panel.frame.width == 820 && panel.frame.height == 330, "Empty SwiftUI content resized caption window")
         panel.close()
         InteractionTests.run(preferences: prefs)

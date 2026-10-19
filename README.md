@@ -1,4 +1,4 @@
-# MCLBB — Meeting Captions: Language Barrier Breaker (BRAIN-1)
+# Temada — live meeting captions & translation (BRAIN-1)
 
 Rust/egui floating window; Swift ScreenCaptureKit/AVFoundation audio capture.
 **No downloaded models required.** Original transcript + EN/RU/UZ translation.
@@ -7,9 +7,10 @@ Existing Python/local routed STT and frozen P0–P5 criteria are unchanged.
 
 ## Native menu-bar UI (SwiftUI + AppKit)
 
-**MCLBB.app** uses the stable `dev.bro.mclbb` bundle ID/preferences domain,
-separate from every legacy Meeting Captions / Native v2/v3/v4 app. It does NOT
-replace or stop them. MCLBB includes a locally drawn caption/translation icon.
+**Temada.app** (formerly MCLBB) preserves `dev.bro.mclbb` and the same approved
+certificate/preferences domain to avoid deliberately resetting privacy grants.
+It does NOT replace or stop another running app. The checked-in Temada artwork
+was generated from a public brand-only prompt; build-time icon rendering is local.
 Rust retains the same model/audio/TLS backend; the native UI starts it in a private
 `--native-worker` JSON-lines mode (no egui window). No WebView or downloaded models.
 
@@ -19,14 +20,14 @@ bash scripts/test-native.sh
 export MC_CODESIGN_IDENTITY="YOUR_APPROVED_CERTIFICATE_40_HEX_SHA1"
 bash scripts/test-signing.sh  # local key use; user handles any Keychain prompt
 bash scripts/build-native.sh
-open "dist/MCLBB.app"
+open "dist/Temada.app"
 # In Settings, paste the Gemini API key into the masked API-key field.
 ```
 
 Build refuses an existing destination, including an app that might be running.
 For a candidate build, choose a **new** absolute `MC_NATIVE_APP=/path/Candidate.app`
 rather than overwriting/signing an active bundle. Use the SAME approved certificate
-for subsequent builds. A stable installed path such as `~/Applications/MCLBB.app`
+for subsequent builds. A stable installed path such as `~/Applications/Temada.app`
 should be replaced only after explicit Quit approval, ownership/idle checks and a
 private pre-change receipt/backup; this script never overwrites it. Only the
 script's private staging folder is removed. Signing refuses missing, ad-hoc or
@@ -54,9 +55,10 @@ against that app while it is active.
   owned worker's stdin pipe; closing that pipe still cancels the worker. Clear key
   removes the editable value; quitting requires entry again. This is not a promise
   of cryptographic zeroization or protection against OS swap/crash dumps.
-- Consent is NOT saved; keys/captions/audio are never saved by this UI. Start is
-  manual and requires a valid key and consent. Key/source/target changes revoke
-  consent; settings cannot change the capture configuration during a session.
+- Consent is NOT saved. API keys/audio are not saved by this UI; text captions
+  can now be saved locally (see Meeting files). Start is manual and requires a
+  valid key and consent. Key/source/target/save-toggle/folder changes revoke
+  consent; capture and recording settings cannot change during a session.
 - Animated row insertion/autoscroll; respects macOS Reduce Motion. Old paired rows
   are bounded in memory. Unpaired backlog/oversized frames stop visibly rather than
   silently dropping text. Clear is disabled during capture to avoid resetting the
@@ -74,16 +76,17 @@ against that app while it is active.
   and sockets. If graceful Quit is not confirmed within 8s, quitting is cancelled;
   there is no force-kill of an uncertain process or any other app/session.
 - **First launch:** choose the audio source, click **Request access**, then enable
-  **MCLBB** in Privacy Settings (not an old Native v2 entry). Click **Check again**.
+  **Temada** in Privacy Settings (an older entry may say MCLBB, not Native v2).
+  Click **Check again**.
   Both may need a second explicit request for Microphone after System audio is
-  granted. If macOS requires a restart, quit and reopen MCLBB yourself; permissions
+  granted. If macOS requires a restart, quit and reopen Temada yourself; permissions
   are never reset or bypassed. Refresh/preflight never opens an OS prompt. Requests
   are at most once per missing permission per run; denied/restricted Microphone
   directs to Settings. Unsigned test builds cannot request access/start capture.
   Start requires source-specific grants AND fresh cloud consent. No capture/network
   occurs simply by granting permission or opening the app. macOS may still impose
   its own periodic confirmation policy; this does not bypass it.
-  Stop capture in the old app yourself first, especially in Both mode; MCLBB never
+  Stop capture in the old app yourself first, especially in Both mode; Temada never
   closes another user's running application.
 
 Automated native tests use synthetic text and private temporary test preferences:
@@ -101,6 +104,42 @@ JSON escaping and boundary ordering/backpressure. These do not prove actual nati
 window interactions, device capture, semantic translation alignment or smoothness.
 Live native UI/Meet/Zoom/TCC checks and comparable CPU/memory/frame-time measurements
 remain manual acceptance; native technology alone is not a performance guarantee.
+
+## Meeting files (native Temada)
+
+Settings → **Meeting files** has a visible save toggle (on by default) and folder
+picker. No file is created until manual Start, after source/cloud-cost consent.
+Default: `~/Library/Application Support/Temada/Meetings`. Each session creates a
+unique private `Meeting-<UTC timestamp>-<UUID>/` directory (0700), never overwriting
+another session. `meeting.jsonl` (0600) journals timestamped original/translation
+stream deltas, provisional input and finish boundaries independently of the
+48-row overlay. No audio, API-key bootstrap, or status/error messages are archived.
+These are **plaintext** meeting records, not encrypted; choose a private folder.
+Cloud-synced destinations/OS backups may copy them. Retention/deletion is manual.
+
+On Stop, the private serial writer flushes/closes the journal and exports
+`meeting.md` (0600), with separate Original/Translation sections per audio source;
+this does not invent semantic sentence alignment. Unfinished provisional input is
+explicitly labelled. Menu → **Show last meeting files** opens that session folder;
+the configured parent path persists, but the last-session pointer is launch-only.
+Clear text clears ONLY the overlay, not saved files. Save-off creates no archive.
+
+Disk work/export is off the UI thread; queued data is capped at 1MiB and each
+journal at 16MiB. Limit/write failures stop capture visibly and retain partial files
+instead of silently discarding accepted captions. Quit waits for both worker exit
+AND final pipe-frame delivery, then file completion. A save failure cancels the
+pending Quit and shows Settings. The existing 8s graceful-Quit deadline remains;
+no force-kill is used. Abrupt crashes/power loss can lose pending/buffered writes;
+JSONL is a best-effort recovery artifact, and its final line may be incomplete.
+Markdown export is not guaranteed after a crash or a full disk. Provider errors,
+manual Stop and the existing 10-minute cap can still truncate pending speech.
+Disabling saving/clearing text does not delete earlier meetings. Generated audio
+remains muted/discarded; this feature does NOT enable audio recording.
+
+Synthetic tests cover 120 mixed-language/source entries beyond UI eviction,
+private permissions, unique/exclusive output, provisional labels, status/message
+exclusion, queue/file limits, export failure, save-off and appearance migration.
+Real-device meeting recording/readability/performance remain manual acceptance.
 
 ## Default: direct Gemini Live API
 
@@ -185,7 +224,8 @@ TLS + authenticated setup only, sends no audio, and never starts capture.
 - Stop/close ends only this app's helpers and sockets, waits for cleanup. Neither
   another app/session nor a user's Pi/CLI process is stopped. Queued/in-flight audio
   and unfinished transcripts can be discarded; this is not a lossless recorder.
-- Live audio is never written to WAV/disk by the helper; captions remain in memory.
+- Live audio is never written to WAV/disk by the helper. The native Temada UI
+  can save text meeting files as described above; the legacy Rust GUI does not.
   Quiet audio can still consume API quota. Device/meeting quality remains untested.
 
 ## Optional legacy CLI mode (experimental, NOT realtime)
