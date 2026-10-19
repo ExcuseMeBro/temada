@@ -14,41 +14,10 @@ extension Color {
 struct CaptionOverlay: View {
     @ObservedObject var preferences: Preferences
     @ObservedObject var captions: Captions
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var follow = CaptionFollowState()
     var body: some View {
         let a = preferences.appearance
-        let rows = captions.rows
-        let animation: Animation? = a.animations && !reduceMotion ? .easeOut(duration: 0.18) : nil
-        // Deliberately NO controls, status, source headers or placeholders here.
-        ScrollViewReader { proxy in
-            ScrollView(.vertical, showsIndicators: true) {
-                LazyVStack(alignment: .leading, spacing: 8) {
-                    ForEach(rows) { pair in
-                        VStack(alignment: .leading, spacing: 3) {
-                            // Compact window/fonts, but never truncate transcript history.
-                            Text(pair.original).font(.system(size: a.originalSize, weight: .regular)).foregroundStyle(Color(hex: a.originalColor))
-                                .fixedSize(horizontal: false, vertical: true)
-                            if !pair.translation.isEmpty {
-                                Text(pair.translation).font(.system(size: a.translationSize, weight: .medium)).foregroundStyle(Color(hex: a.translationColor))
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .id(pair.id)
-                        .transition(.opacity.combined(with: .move(edge: .bottom)))
-                        .accessibilityElement(children: .combine)
-                    }
-                }
-                .padding(12)
-                .animation(animation, value: rows.map(\.id))
-            }
-            .captionScrollFollowing($follow)
-            .onChange(of: captions.rows) { _, rows in
-                if rows.isEmpty { follow.latest = true }
-                if follow.latest, let last = rows.last { withAnimation(animation) { proxy.scrollTo(last.id, anchor: .bottom) } }
-            }
-        }
+        // Exact native text geometry; no estimated lazy heights or scroll animations.
+        CaptionScrollText(rows: captions.rows, appearance: a)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(hex: a.backgroundColor).opacity(a.opacity), in: RoundedRectangle(cornerRadius: 16))
     }
@@ -126,7 +95,7 @@ struct NativeSettings: View {
                                 Text("O‘zbekcha").tag("uz"); Text("English").tag("en"); Text("Русский").tag("ru")
                             }
                         }
-                        Text("Audio goes to Google. API billing is separate from subscriptions; generated audio is muted but may still be billed. Both uses two sessions. No automatic reconnect; 10-minute safety stop.")
+                        Text("Audio goes to Google. API billing is separate from subscriptions; generated audio is muted but may still be billed. Both uses two sessions. Meetings keep running until Stop, with automatic server-requested resumptions (ongoing API charges). Network/quota errors and resource limits still stop safely.")
                             .font(.caption).foregroundStyle(.secondary)
                         Text("Use headphones for Both. Stop the old app yourself before starting another capture session.")
                             .font(.caption).foregroundStyle(.secondary)
@@ -182,7 +151,7 @@ struct NativeSettings: View {
                             Text("620 × 190 · 17/20 pt · full scrollback").font(.caption).foregroundStyle(.secondary)
                             Spacer()
                         }
-                        Text("All original text and translations stay in scrollback until you explicitly Clear text or quit. Scroll up to read history; return to the bottom to follow live captions (macOS 15+). Meeting files keep previous sessions when saving is on. History/file safety limits stop capture instead of silently deleting text.").font(.caption).foregroundStyle(.secondary)
+                        Text("All original text and translations stay in scrollback until you explicitly Clear text or quit. Scroll up to read history; return to the bottom to follow live captions. Use the scrollbar or trackpad; caption text still drags the window. Meeting files keep previous sessions when saving is on. History/file safety limits stop capture instead of silently deleting text.").font(.caption).foregroundStyle(.secondary)
                         sizeSlider("Original", value: $preferences.appearance.originalSize, range: 12...64)
                         sizeSlider("Translation", value: $preferences.appearance.translationSize, range: 12...72)
                         HStack {

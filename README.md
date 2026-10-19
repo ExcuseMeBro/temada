@@ -44,8 +44,9 @@ against that app while it is active.
   animation switch; all full original/translation rows remain scrollable. Drag ANYWHERE, including on caption text; resize all
   four edges/four corners (8pt edges, forgiving16pt corner targets). AppKit handles
   events before SwiftUI, so text/ScrollView cannot swallow the native window drag.
-  Resize keeps the opposite edge fixed and clamps to340×140…1800×1200pt. Scroll-wheel
-  text scrolling is unchanged. Caption dragging needs no global input monitors or
+  Resize keeps the opposite edge fixed and clamps to340×140…1800×1200pt. Native
+  scrollbar controls bypass window dragging (outermost3px remains a resize edge);
+  trackpad/wheel scrolling is passed through. Caption dragging needs no global input monitors or
   Accessibility permission; cursor dictation below does require Accessibility.
   Appearance,
   position, dimensions and source/target persist in UserDefaults.
@@ -61,10 +62,12 @@ against that app while it is active.
   valid key and consent. Key/source/target/save-toggle/folder changes revoke
   consent; capture and recording settings cannot change during a session.
 - Full scrollback, not a latest-pair suffix or 2/3-line crop. Compact layout changes
-  only window/font sizes. New rows move older text upward; `LazyVStack` avoids
-  eagerly creating every row view. On macOS 15+, scrolling back suspends live
-  following; returning to the bottom resumes it. macOS 14 keeps full history but
-  still auto-follows incoming text. Animations respect Reduce Motion.
+  only window/font sizes. An AppKit NSScrollView/NSTextView uses actual document
+  height, incremental attributed-text suffix updates and a reachable native scrollbar,
+  not animated scrollTo/estimated lazy heights. Scrolling back suspends following;
+  returning within6pt of the bottom resumes it, including on macOS14. New partial
+  text does not move a reader's viewport; resize/font changes recalculate layout.
+  Streaming text/scroll updates are not animated (avoids competing scroll motions).
   Starting another capture preserves earlier scrollback and unique row IDs.
   Retired history is bounded at 16MiB UTF-8 text/10,000 rows, separately from the
   48-row alignment cache (64 pending-row hard limit). Limits stop capture visibly,
@@ -220,9 +223,14 @@ subscription. Free tier and access to this preview model are NOT guaranteed.
 Live Translate requires AUDIO output; even though we discard audio, Google may
 bill generated audio as well as audio input. Both mode can incur two sessions'
 usage. The app cannot verify your billing tier, credits or dollar spend. It does
-not enable billing, silently switch models/providers, or retry/reconnect. Check
+not enable billing or silently switch models/providers. Meeting sessions request
+context compression and session-resumption updates. A server GoAway may resume the
+same session automatically with an in-memory handle; charges continue until Stop.
+There is no fixed meeting-duration cap and NO monetary budget guarantee. Check
 Google pricing and use a billing-disabled project if you require no paid use.
-The 10-minute safety stop is a duration bound, NOT a monetary budget guarantee.
+Quota/auth/network failures are not blindly retried. Preview-model/account support
+for these session features still needs real-account verification; unsupported setup
+fails visibly with no model/provider fallback.
 
 Before Start, enter the key in the masked field or select an existing `.env` path
 and click **Load .env**. Only `GEMINI_API_KEY` / `GOOGLE_API_KEY` are accepted;
@@ -268,8 +276,14 @@ TLS + authenticated setup only, sends no audio, and never starts capture.
 
 - At most two live sessions. 12s connection/setup timeout; 2s sends; 20s missing
   capture watchdog; 60s server-response watchdog with WebSocket heartbeats.
-- 10-minute safety session cap; restart explicitly. Provider time/session limits,
-  quota, permission/network errors stop visibly. No billable automatic reconnect.
+- No artificial10-minute meeting stop. Server-requested GoAway resumes only with
+  a valid server handle; at most3 attempts per60s/source, one12s setup attempt each,
+  no retry loop on failure. Capture helper remains running (no repeat TCC prompt).
+  During resumption, at most128frames/128,000PCMbytes (~4s at16kHz) are held only in
+  RAM and flushed within2s; exceeding this stops rather than silently dropping audio.
+  Resumption is a server checkpoint, NOT guaranteed lossless/replay-free streaming.
+  Missing handles, quota/auth/network failures and all resource bounds still stop.
+  Existing dictation60s recording/15s final-turn limits remain unchanged.
 - UI channel is bounded; slow consumers stop rather than silently drop captions.
   Terminal errors are separately retained even if the UI queue is full.
 - Stop/close ends only this app's helpers and sockets, waits for cleanup. Neither

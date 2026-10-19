@@ -506,7 +506,7 @@ impl eframe::App for App {
                     ui.small(format!("Preview model: {} • auto-detect speech • target: {}", live::MODEL, self.target));
                     ui.small("Cloud API is separate from subscription. Free tier/model access not guaranteed; enabled billing may charge.");
                     ui.small("Live Translate generates AUDIO + text. Audio is discarded but can still be billed. Both = two API sessions.");
-                    ui.small("10-minute safety stop; no auto-reconnect. Use headphones in Both mode to reduce duplicated speech/echo.");
+                    ui.small("No fixed meeting timer; server-requested resumptions continue API charges until Stop. Errors/resource limits still stop safely. Use headphones in Both mode.");
                     ui.checkbox(&mut self.consent, "I agree to send audio to Google and understand possible API charges.");
                 } else {
                     ui.checkbox(&mut self.codex, "Translate with Codex / ChatGPT login (Gemini still transcribes audio)");

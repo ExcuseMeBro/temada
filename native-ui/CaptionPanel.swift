@@ -42,10 +42,24 @@ struct ResizeEdges: OptionSet {
     private struct ResizeSession { let edges: ResizeEdges; let frame: NSRect; let pointer: NSPoint }
     private var resizeSession: ResizeSession?
     func dragWindow(with event: NSEvent) { performDrag(with: event) }
+    func sendToContent(_ event: NSEvent) { super.sendEvent(event) }
+    func isScrollControl(at point: NSPoint) -> Bool {
+        var view = contentView?.hitTest(point)
+        while let current = view {
+            if current is NSScroller { return true }
+            view = current.superview
+        }
+        return false
+    }
     override func sendEvent(_ event: NSEvent) {
         guard event.window === self else { super.sendEvent(event); return }
         switch event.type {
         case .leftMouseDown:
+            // Keep the outer 3px resize edge, but never turn scrollbar clicks
+            // or thumb dragging into window dragging/resizing.
+            if event.locationInWindow.x < frame.width - 3 && isScrollControl(at: event.locationInWindow) {
+                resizeSession = nil; sendToContent(event); return
+            }
             let edges = ResizeEdges.hit(event.locationInWindow, size: frame.size)
             if !edges.isEmpty {
                 resizeSession = ResizeSession(edges: edges, frame: frame, pointer: convertPoint(toScreen: event.locationInWindow))
@@ -66,6 +80,7 @@ struct ResizeEdges: OptionSet {
         case .mouseMoved:
             super.sendEvent(event)
             let edges = ResizeEdges.hit(event.locationInWindow, size: frame.size)
+            if isScrollControl(at: event.locationInWindow) { NSCursor.arrow.set(); return }
             if edges.intersection([.left, .right]).isEmpty { (edges.isEmpty ? NSCursor.openHand : NSCursor.resizeUpDown).set() }
             else if edges.intersection([.top, .bottom]).isEmpty { NSCursor.resizeLeftRight.set() }
             else { NSCursor.crosshair.set() }

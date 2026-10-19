@@ -35,6 +35,9 @@ pub struct Config {
 fn setup(target: &str) -> Value {
     json!({"setup": {"model": format!("models/{MODEL}"), "generationConfig": {"responseModalities": ["AUDIO"], "translationConfig": {"targetLanguageCode": target, "echoTargetLanguage": true}}, "inputAudioTranscription": {}, "outputAudioTranscription": {}}})
 }
+fn recording_limit(dictation: bool) -> Option<Duration> {
+    dictation.then(|| Duration::from_secs(60))
+}
 fn dictation_setup() -> Value {
     let mut value = setup("en");
     value["setup"]["realtimeInputConfig"] = json!({"automaticActivityDetection":{"disabled":true}});
@@ -101,6 +104,61 @@ fn emit(tx: &SyncSender<Event>, source: &str, value: &Value) -> Result<(), Strin
     }
     Ok(())
 }
+fn meeting_setup(target: &str, handle: Option<&str>) -> Value {
+    let mut value = setup(target);
+    value["setup"]["contextWindowCompression"] = json!({"slidingWindow":{}});
+    value["setup"]["sessionResumption"] = match handle {
+        Some(handle) => json!({"handle":handle}),
+        None => json!({}),
+    };
+    value
+}
+// Handles are credentials: bounded, launch-memory only, never Debug/logged.
+struct ResumeState {
+    handle: Option<String>,
+    window: Instant,
+    attempts: u8,
+}
+impl ResumeState {
+    fn new() -> Self {
+        Self {
+            handle: None,
+            window: Instant::now(),
+            attempts: 0,
+        }
+    }
+    fn observe(&mut self, value: &Value) -> Result<(), String> {
+        if let Some(update) = value.get("sessionResumptionUpdate") {
+            if update["resumable"] != true {
+                self.handle = None;
+            } else if let Some(handle) = update["newHandle"].as_str() {
+                if handle.is_empty()
+                    || handle.len() > 4096
+                    || !handle.bytes().all(|b| (33..=126).contains(&b))
+                {
+                    return Err("Invalid session resumption handle (details hidden)".into());
+                }
+                self.handle = Some(handle.into());
+            }
+        }
+        Ok(())
+    }
+    fn reserve(&mut self, now: Instant) -> Result<&str, String> {
+        if now.duration_since(self.window) >= Duration::from_secs(60) {
+            self.window = now;
+            self.attempts = 0;
+        }
+        if self.attempts >= 3 {
+            return Err(
+                "Repeated server rotations; stopped to prevent a billable reconnect loop".into(),
+            );
+        }
+        self.attempts += 1;
+        self.handle.as_deref().ok_or_else(|| {
+            "Server ended a non-resumable session; restart explicitly (no blind reconnect)".into()
+        })
+    }
+}
 async fn source(
     config: &Config,
     name: &str,
@@ -118,6 +176,7 @@ async fn connect_setup(
     config: &Config,
     endpoint: &str,
     dictation: bool,
+    handle: Option<&str>,
 ) -> Result<
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
     String,
@@ -185,7 +244,7 @@ async fn connect_setup(
         if dictation {
             dictation_setup()
         } else {
-            setup(&config.target)
+            meeting_setup(&config.target, handle)
         }
         .to_string()
         .into(),
@@ -214,6 +273,78 @@ async fn connect_setup(
     }
     Ok(ws)
 }
+struct ResumeAudio {
+    frames: Vec<Value>,
+    bytes: usize,
+}
+impl ResumeAudio {
+    fn new() -> Self {
+        Self {
+            frames: Vec::new(),
+            bytes: 0,
+        }
+    }
+    fn push(&mut self, line: &str) -> Result<(), String> {
+        let frame = audio(line)?;
+        let encoded = frame["realtimeInput"]["audio"]["data"]
+            .as_str()
+            .ok_or("Invalid resumption audio")?;
+        let bytes = encoded.len().div_ceil(4) * 3; // Conservative decoded bound.
+        if self.frames.len() >= 128 || self.bytes + bytes > 128_000 {
+            return Err("Reconnection exceeded 4s audio buffer; stopped instead of silently dropping speech".into());
+        }
+        self.bytes += bytes;
+        self.frames.push(frame);
+        Ok(())
+    }
+}
+async fn resume_buffered(
+    config: &Config,
+    endpoint: &str,
+    handle: &str,
+    lines: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
+    stop: &AtomicBool,
+    failed: &AtomicBool,
+) -> Result<
+    Option<
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+    >,
+    String,
+> {
+    let connect = timeout(
+        Duration::from_secs(12),
+        connect_setup(config, endpoint, false, Some(handle)),
+    );
+    tokio::pin!(connect);
+    let mut check = interval(Duration::from_millis(50));
+    let mut buffered = ResumeAudio::new();
+    let mut ws = loop {
+        tokio::select! {
+            _ = check.tick() => if stop.load(Ordering::Relaxed) || failed.load(Ordering::Relaxed) { return Ok(None); },
+            result = &mut connect => break result.map_err(|_| "Live resumption timed out (12s); no retry loop")??,
+            line = lines.next_line() => {
+                let line = line.map_err(|_| "Capture pipe failed during resumption")?.ok_or("Capture ended during resumption")?;
+                buffered.push(&line)?;
+            }
+        }
+    };
+    timeout(Duration::from_secs(2), async {
+        for frame in buffered.frames {
+            if stop.load(Ordering::Relaxed) || failed.load(Ordering::Relaxed) {
+                return Ok(());
+            }
+            ws.send(Message::Text(frame.to_string().into()))
+                .await
+                .map_err(|_| "Resumed audio upload failed")?;
+        }
+        Ok::<(), &str>(())
+    })
+    .await
+    .map_err(|_| "Buffered audio upload stalled (2s)")??;
+    Ok(Some(ws))
+}
 async fn source_at(
     config: &Config,
     name: &str,
@@ -223,7 +354,7 @@ async fn source_at(
     endpoint: &str,
     finish: Option<&AtomicBool>,
 ) -> Result<(), String> {
-    let connect = connect_setup(config, endpoint, finish.is_some());
+    let connect = connect_setup(config, endpoint, finish.is_some(), None);
     let mut check = interval(Duration::from_millis(50));
     let mut ws = tokio::select! {
         result = timeout(Duration::from_secs(12), connect) => result.map_err(|_| "Live setup timed out (12s)")??,
@@ -258,6 +389,7 @@ async fn source_at(
         "Live connected • {name} • PCM16 streaming • generated audio muted (may still be billed)"
     )));
     let begin = Instant::now();
+    let mut resume = ResumeState::new();
     let mut last_audio = Instant::now();
     let mut last_server = Instant::now();
     let mut finishing: Option<Instant> = None;
@@ -268,8 +400,7 @@ async fn source_at(
             tokio::select! {
                 _ = check.tick() => {
                     if stop.load(Ordering::Relaxed) || failed.load(Ordering::Relaxed) { return Ok(()); }
-                    if begin.elapsed() > Duration::from_secs(600) { return Err("10-minute safety session limit reached. Restart explicitly to continue.".into()); }
-                    if finish.is_some() && finishing.is_none() && begin.elapsed() > Duration::from_secs(60) { return Err("Dictation 60-second limit reached; draft retained, nothing inserted".into()); }
+                    if finishing.is_none() && recording_limit(finish.is_some()).is_some_and(|limit| begin.elapsed() > limit) { return Err("Dictation 60-second limit reached; draft retained, nothing inserted".into()); }
                     if finishing.is_none() && finish.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
                         let _ = child.kill().await;
                         let _ = child.wait().await;
@@ -309,7 +440,28 @@ async fn source_at(
                             let data = frame.into_data();
                             if data.len() > 2_000_000 { return Err("Live response exceeds size limit".into()); }
                             let value: Value = serde_json::from_slice(&data).map_err(|_| "Invalid Live response")?;
-                            emit(tx, name, &value)?;
+                            // Preserve any final text even if the subsequent resume fails.
+                            let mut content = value.clone();
+                            if finish.is_none() { content.as_object_mut().ok_or("Invalid Live message object")?.remove("goAway"); }
+                            emit(tx, name, &content)?;
+                            if finish.is_none() {
+                                resume.observe(&value)?;
+                                if value.get("goAway").is_some() && value.get("error").is_none() {
+                                    let handle = resume.reserve(Instant::now())?;
+                                    tx.try_send(Event::Status(format!("Renewing {name} server connection; buffering up to 4s audio; API charges continue")))
+                                        .map_err(|_| "Caption UI is behind during reconnection")?;
+                                    // One session must not have two active connections.
+                                    timeout(Duration::from_millis(200), ws.close(None)).await
+                                        .map_err(|_| "Old Live connection did not close before resume")?
+                                        .map_err(|_| "Cannot close old Live connection before resume")?;
+                                    let replacement = resume_buffered(config, endpoint, handle, &mut lines, stop, failed).await?;
+                                    let Some(replacement) = replacement else { return Ok(()); };
+                                    ws = replacement;
+                                    last_audio = Instant::now(); last_server = Instant::now();
+                                    tx.try_send(Event::Status(format!("Live resumed • {name} • API charges continue")))
+                                        .map_err(|_| "Caption UI is behind after reconnection")?;
+                                }
+                            }
                             if finishing.is_some() && value["serverContent"]["interrupted"] == true { return Err("Dictation interrupted; draft retained, nothing inserted".into()); }
                             if value["serverContent"]["turnComplete"] == true {
                                 if finishing.is_some() { return Ok(()); }
@@ -541,6 +693,185 @@ mod tests {
         .contains("cancelled"));
     }
     #[test]
+    fn meeting_resumes_with_bounded_ephemeral_handles_not_dictation() {
+        let initial = meeting_setup("uz", None);
+        assert!(initial["setup"]["sessionResumption"].is_object());
+        assert!(initial["setup"]["contextWindowCompression"]["slidingWindow"].is_object());
+        assert!(dictation_setup()["setup"]
+            .get("sessionResumption")
+            .is_none());
+        assert!(dictation_setup()["setup"]
+            .get("contextWindowCompression")
+            .is_none());
+        let mut state = ResumeState::new();
+        let now = Instant::now();
+        assert!(state.reserve(now).is_err());
+        state
+            .observe(
+                &json!({"sessionResumptionUpdate":{"resumable":true,"newHandle":"fixture-handle"}}),
+            )
+            .unwrap();
+        assert_eq!(
+            meeting_setup("uz", Some(state.handle.as_deref().unwrap()))["setup"]
+                ["sessionResumption"]["handle"],
+            "fixture-handle"
+        );
+        // Missing handle reservation above counts conservatively as an attempt.
+        assert_eq!(state.reserve(now).unwrap(), "fixture-handle");
+        assert_eq!(state.reserve(now).unwrap(), "fixture-handle");
+        assert!(state.reserve(now).unwrap_err().contains("reconnect loop"));
+        assert!(state.reserve(now + Duration::from_secs(61)).is_ok());
+        state
+            .observe(&json!({"sessionResumptionUpdate":{"resumable":false}}))
+            .unwrap();
+        assert!(state.handle.is_none() && state.reserve(now + Duration::from_secs(61)).is_err());
+        for handle in ["".into(), "private\nfixture".into(), "x".repeat(4097)] {
+            let e = state
+                .observe(&json!({"sessionResumptionUpdate":{"resumable":true,"newHandle":handle}}))
+                .unwrap_err();
+            assert!(!e.contains("private"));
+        }
+    }
+    #[test]
+    fn reconnection_audio_is_bounded_without_silent_drops() {
+        let mut buffer = ResumeAudio::new();
+        let line = format!("PCM:{}", STANDARD.encode(vec![0; 3200]));
+        for _ in 0..39 {
+            buffer.push(&line).unwrap();
+        }
+        assert_eq!(buffer.frames.len(), 39);
+        assert!(buffer
+            .push(&format!("PCM:{}", STANDARD.encode(vec![0; 32000])))
+            .is_err());
+        assert_eq!(buffer.frames.len(), 39);
+        let mut tiny = ResumeAudio::new();
+        for _ in 0..128 {
+            tiny.push("PCM:AAABAA==").unwrap();
+        }
+        assert!(tiny.push("PCM:AAABAA==").is_err());
+        assert!(ResumeAudio::new().push("ERROR:fixture").is_err());
+    }
+    #[tokio::test]
+    async fn server_goaway_resumes_same_capture_and_preserves_final_text() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let helper = dir.path().join("capture-test");
+        let pidfile = dir.path().join("pid");
+        std::fs::write(
+            &helper,
+            format!(
+                "#!/bin/sh\necho $$ >> '{}'\nprintf 'PCM:AAABAA==\\n'\nexec /bin/sleep 30\n",
+                pidfile.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("ws://{}", listener.local_addr().unwrap());
+        let config = Config {
+            key: "fixture-only".into(),
+            target: "uz".into(),
+            source: "system".into(),
+            helper,
+        };
+        let stop = AtomicBool::new(false);
+        let failed = AtomicBool::new(false);
+        let (tx, rx) = std::sync::mpsc::sync_channel(16);
+        let server = async {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut first = tokio_tungstenite::accept_async(socket).await.unwrap();
+            let request: Value =
+                serde_json::from_slice(&first.next().await.unwrap().unwrap().into_data()).unwrap();
+            assert_eq!(request, meeting_setup("uz", None));
+            first
+                .send(Message::Binary(
+                    json!({"setupComplete":{}}).to_string().into_bytes().into(),
+                ))
+                .await
+                .unwrap();
+            // Wait for the helper's first frame: its PID receipt now exists,
+            // so a very fast mock cannot cancel before the child is scheduled.
+            loop {
+                match first.next().await.unwrap().unwrap() {
+                    Message::Text(_) => break,
+                    Message::Ping(p) => first.send(Message::Pong(p)).await.unwrap(),
+                    _ => {}
+                }
+            }
+            first.send(Message::Binary(json!({"sessionResumptionUpdate":{"resumable":true,"newHandle":"fixture-handle"},"goAway":{"timeLeft":"10s"},"serverContent":{"inputTranscription":{"text":"First.","finished":true},"outputTranscription":{"text":"Birinchi.","finished":true}}}).to_string().into_bytes().into())).await.unwrap();
+            // A real resumable session must close its previous connection first.
+            while let Some(Ok(message)) = first.next().await {
+                if matches!(message, Message::Close(_)) {
+                    break;
+                }
+            }
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut second = tokio_tungstenite::accept_async(socket).await.unwrap();
+            let request: Value =
+                serde_json::from_slice(&second.next().await.unwrap().unwrap().into_data()).unwrap();
+            assert_eq!(request, meeting_setup("uz", Some("fixture-handle")));
+            second
+                .send(Message::Binary(
+                    json!({"setupComplete":{}}).to_string().into_bytes().into(),
+                ))
+                .await
+                .unwrap();
+            second.send(Message::Binary(json!({"serverContent":{"inputTranscription":{"text":"Next."},"outputTranscription":{"text":"Keyingi."}}}).to_string().into_bytes().into())).await.unwrap();
+            while let Some(Ok(message)) = second.next().await {
+                match message {
+                    Message::Ping(p) => {
+                        let _ = second.send(Message::Pong(p)).await;
+                    }
+                    Message::Close(_) => break,
+                    _ => {}
+                }
+            }
+        };
+        let ui = async {
+            let mut inputs = Vec::new();
+            loop {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+                while let Ok(event) = rx.try_recv() {
+                    if let Event::Live(_, Some(input), _, _) = event {
+                        inputs.push(input);
+                    }
+                }
+                if inputs.len() == 2 {
+                    assert_eq!(inputs, ["First.", "Next."]);
+                    stop.store(true, Ordering::Relaxed);
+                    break;
+                }
+            }
+        };
+        timeout(Duration::from_secs(4), async {
+            let (result, _, _) = tokio::join!(
+                source_at(&config, "system", &stop, &failed, &tx, &endpoint, None),
+                server,
+                ui
+            );
+            result.unwrap();
+        })
+        .await
+        .unwrap();
+        let pids = std::fs::read_to_string(pidfile).unwrap();
+        assert_eq!(
+            pids.lines().count(),
+            1,
+            "Resumption must not restart capture or request permissions"
+        );
+        let pid: i32 = pids.trim().parse().unwrap();
+        assert_eq!(unsafe { libc::kill(pid, 0) }, -1, "Owned helper leaked");
+    }
+    #[test]
+    fn meeting_has_no_duration_cap_but_dictation_keeps_60_seconds() {
+        assert_eq!(
+            recording_limit(false),
+            None,
+            "Meeting must continue past 600s"
+        );
+        assert_eq!(recording_limit(true), Some(Duration::from_secs(60)));
+    }
+    #[test]
     fn uzbek_setup_has_both_transcripts() {
         let v = setup("uz");
         assert_eq!(
@@ -600,7 +931,7 @@ mod tests {
             let setup_frame = ws.next().await.unwrap().unwrap().into_text().unwrap();
             assert_eq!(
                 serde_json::from_str::<Value>(&setup_frame).unwrap(),
-                setup("uz")
+                meeting_setup("uz", None)
             );
             ws.send(Message::Binary(
                 json!({"setupComplete":{}}).to_string().into_bytes().into(),
@@ -668,7 +999,7 @@ mod tests {
         };
         let mut ws = timeout(
             Duration::from_secs(12),
-            connect_setup(&config, ENDPOINT, false),
+            connect_setup(&config, ENDPOINT, false, None),
         )
         .await
         .expect("Setup timeout")

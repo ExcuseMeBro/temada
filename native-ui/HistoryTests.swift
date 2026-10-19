@@ -2,6 +2,7 @@ import Foundation
 
 @MainActor enum HistoryTests {
     static func run() {
+        ScrollTests.run()
         let captions = Captions()
         var originals: [String] = [], translations: [String] = []
         for index in 0..<240 {

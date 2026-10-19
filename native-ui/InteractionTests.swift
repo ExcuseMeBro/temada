@@ -2,7 +2,11 @@ import AppKit
 
 @MainActor private final class TestCaptionPanel: CaptionPanel {
     var dragCalls = 0
+    var contentCalls = 0
     override func dragWindow(with event: NSEvent) { dragCalls += 1 }
+    // Hidden windows do not dispatch normal AppKit control tracking. Verify
+    // routing without activating a window or injecting input into user apps.
+    override func sendToContent(_ event: NSEvent) { contentCalls += 1 }
 }
 @MainActor enum InteractionTests {
     static func run(preferences: Preferences) {
@@ -46,7 +50,13 @@ import AppKit
         panel.sendEvent(mouse(.leftMouseUp, NSPoint(x: 919, y: 160)))
         panel.sendEvent(mouse(.leftMouseDragged, NSPoint(x: 1000, y: 160)))
         precondition(panel.frame.width == 920, "Resize continued after mouse up")
+        let root = NSView(frame: NSRect(origin: .zero, size: panel.frame.size))
+        let scroller = NSScroller(frame: NSRect(x: panel.frame.width - 20, y: 20, width: 16, height: 200))
+        scroller.isEnabled = true
+        root.addSubview(scroller); panel.contentView = root
+        panel.sendEvent(mouse(.leftMouseDown, NSPoint(x: panel.frame.width - 12, y: 100)))
+        precondition(panel.dragCalls == 1 && panel.contentCalls == 1, "Scrollbar mouse-down was swallowed by window drag/resize")
         panel.close()
-        print("PANEL_INTERACTIONS: PASS — 8 edges/corners, min/max, opposite anchors, text drag route, resize/up events")
+        print("PANEL_INTERACTIONS: PASS — 8 edges/corners, min/max, opposite anchors, text drag route, resize/up events, scrollbar forwarded")
     }
 }
