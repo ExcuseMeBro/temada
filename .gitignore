@@ -1,2 +1,15 @@
 /target/
 /dist/
+.env
+.env.*
+.DS_Store
+*.app/
+*.dSYM/
+Meeting-*/
+Meetings/
+*.wav
+*.mp3
+*.m4a
+*.mp4
+*.pcm
+*.jsonl
