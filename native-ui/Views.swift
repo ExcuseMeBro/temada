@@ -105,8 +105,18 @@ struct NativeSettings: View {
                 GroupBox("Uzbek → English at your cursor · \(dictation.shortcut.display)") {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Enable for this launch, focus an editable text caret, press \(dictation.shortcut.display) and speak Uzbek. Press it again to finish. Google processes microphone audio (API charges); 60s recording / 15s final-turn limit. No Send/Return event. Same English translation model, not a guarantee of perfect wording.").font(.caption)
+                        HStack {
+                            Button("Use ⌃Space") { dictation.setShortcut(.defaultBinding) }
+                            Button(dictation.testingShortcut ? "Stop shortcut test" : "Test shortcut (no audio)") {
+                                if dictation.testingShortcut { dictation.stopShortcutTest() } else { dictation.testShortcut() }
+                            }
+                        }.disabled(worker.running || dictation.active)
+                        Text("1 · Use ⌃Space or record a combination. 2 · Test it without audio. 3 · Enter API key, consent and grant access above/below; click Enable. 4 · Focus your text field and press the shortcut twice: start, then finish.")
+                            .font(.caption)
                         ShortcutRecorder(binding: dictation.shortcut, began: dictation.prepareShortcutRecording, changed: dictation.setShortcut)
                             .frame(height: 30).disabled(worker.running || dictation.active)
+                        Text("Control+Space may be assigned to macOS Input Sources. If reported busy, change that binding in System Settings → Keyboard → Keyboard Shortcuts → Input Sources, or choose another Temada combination. No system shortcuts are changed automatically.")
+                            .font(.caption).foregroundStyle(.secondary)
                         Text("Click Record shortcut, then press your combination. Use ⌘ / ⌃ / ⌥ + a key, or F1–F20 (Fn may be needed). Escape cancels. Saved across launches; enabling is still required each launch. macOS/other apps can reserve combinations; Temada never changes system shortcuts automatically.").font(.caption).foregroundStyle(.secondary)
                         HStack {
                             Button("Microphone access") { permissions.request(source: "microphone") }.disabled(worker.running)

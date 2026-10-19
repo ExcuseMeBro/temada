@@ -8,7 +8,7 @@ struct ShortcutBinding: Codable, Equatable {
     let keyLabel: String
     static let allowedModifiers = UInt32(cmdKey | controlKey | optionKey | shiftKey)
     static let functionKeys: Set<UInt32> = [122,120,99,118,96,97,98,100,101,109,103,111,105,107,113,106,64,79,80,90]
-    static let defaultBinding = ShortcutBinding(keyCode: 49, modifiers: UInt32(cmdKey | shiftKey), keyLabel: "Space")
+    static let defaultBinding = ShortcutBinding(keyCode: 49, modifiers: UInt32(controlKey), keyLabel: "Space")
     var valid: Bool {
         keyCode <= 127 && ![54,55,56,57,58,59,60,61,62,63].contains(keyCode) &&
         modifiers & ~Self.allowedModifiers == 0 &&
@@ -32,6 +32,27 @@ struct ShortcutBinding: Codable, Equatable {
         if !valid { return nil }
     }
 }
+// Read-only symbolic-hotkey metadata. Never changes input-source/Spotlight settings.
+// Missing metadata is not evidence that a shortcut is free; Carbon still checks registration.
+enum SystemShortcutConflict {
+    static func reason(for binding: ShortcutBinding) -> String? {
+        let entries = CFPreferencesCopyAppValue("AppleSymbolicHotKeys" as CFString, "com.apple.symbolichotkeys" as CFString) as? [String: Any] ?? [:]
+        return reason(for: binding, entries: entries)
+    }
+    static func reason(for binding: ShortcutBinding, entries: [String: Any]) -> String? {
+        var cocoa: UInt = 0
+        for (carbon, flag) in [(controlKey, NSEvent.ModifierFlags.control), (optionKey, .option), (shiftKey, .shift), (cmdKey, .command)] {
+            if binding.modifiers & UInt32(carbon) != 0 { cocoa |= flag.rawValue }
+        }
+        for (id, name) in [("60", "Input Sources"), ("61", "Input Sources"), ("64", "Spotlight"), ("65", "Spotlight")] {
+            guard let item = entries[id] as? [String: Any], (item["enabled"] as? NSNumber)?.boolValue == true,
+                  let value = item["value"] as? [String: Any], let params = value["parameters"] as? [NSNumber], params.count == 3,
+                  params[1].uint32Value == binding.keyCode, params[2].uintValue == cocoa else { continue }
+            return "\(binding.display) is assigned to macOS \(name). Change it in System Settings → Keyboard → Keyboard Shortcuts → \(name), or record another Temada shortcut. Temada did not change system settings."
+        }
+        return nil
+    }
+}
 struct HotkeyPressGate {
     private var held = false
     mutating func accept(pressed: Bool) -> Bool {
@@ -48,33 +69,37 @@ struct HotkeyPressGate {
     private var hotkey: EventHotKeyRef?
     private var handler: EventHandlerRef?
     private var gate = HotkeyPressGate()
+    private var activeID: UInt32?
+    private static var nextID: UInt32 = 1
     var triggered: (() -> Void)?
-    nonisolated static func accepts(signature: OSType, id: UInt32) -> Bool { signature == 0x544D4441 && id == 1 }
+    nonisolated static func accepts(signature: OSType, id: UInt32, expectedID: UInt32 = 1) -> Bool { signature == 0x544D4441 && id == expectedID }
     func register(_ binding: ShortcutBinding) -> OSStatus {
-        guard binding.valid, hotkey == nil, handler == nil else { return OSStatus(paramErr) }
+        guard binding.valid, hotkey == nil, handler == nil, Self.nextID < UInt32.max else { return OSStatus(paramErr) }
+        let registrationID = Self.nextID; Self.nextID += 1; activeID = registrationID
         let specs = [EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed)), EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyReleased))]
         let result = specs.withUnsafeBufferPointer { types in
             InstallEventHandler(GetApplicationEventTarget(), { _, event, context in
                 guard let context, let event else { return OSStatus(eventNotHandledErr) }
                 var id = EventHotKeyID()
-                guard GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil, MemoryLayout<EventHotKeyID>.size, nil, &id) == noErr,
-                      GlobalDictationHotkey.accepts(signature: id.signature, id: id.id) else { return OSStatus(eventNotHandledErr) }
-                MainActor.assumeIsolated {
+                guard GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil, MemoryLayout<EventHotKeyID>.size, nil, &id) == noErr else { return OSStatus(eventNotHandledErr) }
+                return MainActor.assumeIsolated {
                     let owner = Unmanaged<GlobalDictationHotkey>.fromOpaque(context).takeUnretainedValue()
+                    guard let expected = owner.activeID,
+                          GlobalDictationHotkey.accepts(signature: id.signature, id: id.id, expectedID: expected) else { return OSStatus(eventNotHandledErr) }
                     if owner.gate.accept(pressed: GetEventKind(event) == UInt32(kEventHotKeyPressed)) { owner.triggered?() }
+                    return noErr
                 }
-                return noErr
             }, types.count, types.baseAddress, Unmanaged.passUnretained(self).toOpaque(), &handler)
         }
         guard result == noErr else { unregister(); return result }
-        let code = RegisterEventHotKey(binding.keyCode, binding.modifiers, EventHotKeyID(signature: 0x544D4441, id: 1), GetApplicationEventTarget(), 0, &hotkey)
+        let code = RegisterEventHotKey(binding.keyCode, binding.modifiers, EventHotKeyID(signature: 0x544D4441, id: registrationID), GetApplicationEventTarget(), 0, &hotkey)
         if code != noErr { unregister() }
         return code
     }
     func unregister() {
         if let hotkey { UnregisterEventHotKey(hotkey) }; hotkey = nil
         if let handler { RemoveEventHandler(handler) }; handler = nil
-        gate = HotkeyPressGate()
+        activeID = nil; gate = HotkeyPressGate()
     }
 }
 // Only a focused, explicitly clicked button consumes keys. A temporary local

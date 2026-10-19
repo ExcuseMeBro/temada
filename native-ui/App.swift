@@ -106,9 +106,10 @@ import Combine
             if dictation.requestFinish() { worker.finishDictation() }
             return
         }
-        guard !worker.running, !meetingFiles.busy, credentials.valid else { return }
+        guard !worker.running, !meetingFiles.busy else { dictation.unavailable("Stop captions / wait for meeting files before dictation."); return }
+        guard credentials.valid else { dictation.unavailable("Enter a valid API key and enable dictation again."); return }
         permissions.refresh()
-        guard permissions.canStart(source: "microphone") else { dictation.disarm(); return }
+        guard permissions.canStart(source: "microphone") else { dictation.unavailable("Microphone access is not ready. Check access, then enable dictation again."); return }
         guard dictation.begin() else { return }
         var config = preferences.appearance; config.source = "microphone"; config.target = "en"
         worker.start(appearance: config, credentials: credentials, consent: true, dictation: true)

@@ -33,8 +33,9 @@
 
 ### ⌨️ Ovozdan inglizcha matn
 
-**Settings → Uzbek → English at your cursor → Record shortcut… → Enable.**
-Mikrofon va Accessibility ruxsati kerak. Matn maydoniga kursor qo‘ying, shortcutni bosing,
+**Settings → Uzbek → English at your cursor → Use ⌃Space → Test shortcut (no audio).**
+Testdan keyin **Enable ⌃Space** bosing. Mikrofon, Accessibility, API key va cloud roziligi kerak.
+⌃Space til almashtirishga band bo‘lsa, macOS Keyboard Shortcuts → Input Sources’da o‘zgartiring yoki boshqa kombinatsiya yozing. Matn maydoniga kursor qo‘ying, shortcutni bosing,
 **Listening** holatini kutib gapiring; tugatish uchun yana bosing. Send/Enter bosilmaydi.
 macOS band qilgan shortcutlar va ayrim matn maydonlari ishlamasligi mumkin.
 
@@ -78,7 +79,7 @@ Ad-hoc imzo qabul qilinmaydi; sertifikat/trust sozlamalari o‘zgartirilmaydi. B
 - **Fayllar:** default `~/Library/Application Support/Temada/Meetings`. Har uchrashuv alohida 0700 papka, `meeting.jsonl` va `meeting.md` 0600 fayllari; private/exclusive yozish, mavjud fayl almashtirilmaydi. Navbat 1 MiB, jurnal 16 MiB. Status/xatolar/key/audio yozilmaydi. Cloud-synced papka yoki OS backup fayllarni tashqariga ko‘chirishi mumkin; o‘chirish foydalanuvchiga bog‘liq.
 - **Stop/Quit:** faqat o‘z helper/socketlari yopiladi; final pipe freymlari va fayl yozilishi kutiladi. 8 s ichida Quit tugamasa yoki saqlash xatosi bo‘lsa, Quit bekor qilinadi; boshqa ilovalar force-kill qilinmaydi. Crash/to‘la diskda pending yozuv yoki Markdown yo‘qolishi mumkin. Bu lossless recorder emas; Stop tugallanmagan nutqni tashlashi mumkin.
 - **Dictation:** faqat alohida Enable va tugma bosishdan keyin; meeting bilan birga ishlamaydi. 60 s yozish + 15 s final-turn kutish, har matn oqimi 16000 UTF-8 bayt. Faqat muvaffaqiyatli final turn va o‘sha xavfsiz caret’da bitta AX insertion; cancellation/error/early/interrupted/empty turn matn kiritmaydi. Password, selection, terminal, o‘zgargan focus/caret va mos kelmagan maydonlar rad etiladi. AX tekshiruvi atomik focus-lock emas; draft faqat qo‘lda Copy uchun xotirada, meeting fayliga kirmaydi.
-- **Shortcut:** ⌘/⌃/⌥ + key, ixtiyoriy Shift yoki F1–F20; default ⇧⌘Space. Oddiy/Shift-only harflar va modifier-only bind yo‘q. Faqat fokusdagi recorder vaqtincha local event’ni oladi; global keyboard monitor/Input Monitoring yoki OS shortcut o‘zgarishi yo‘q. Escape/focus yo‘qolishi yozishni bekor qiladi; bind saqlanadi, arming saqlanmaydi. macOS band qilgan kombinatsiyalar ishlamasligi mumkin.
+- **Shortcut:** ⌘/⌃/⌥ + key, ixtiyoriy Shift yoki F1–F20; default ⌃Space. Eski custom sozlama saqlanadi; **Use ⌃Space** uni almashtiradi. Audiosiz test 30 s davomida faqat hotkey’ni tekshiradi, AX/mikrofon/API/matn kiritishni ishlatmaydi. Input Sources/Spotlight bandligi read-only tekshiriladi. Oddiy/Shift-only harflar va modifier-only bind yo‘q. Faqat fokusdagi recorder vaqtincha local event’ni oladi; global keyboard monitor/Input Monitoring yoki OS shortcut o‘zgarishi yo‘q. Escape/focus yo‘qolishi yozishni bekor qiladi; bind saqlanadi, arming saqlanmaydi. macOS band qilgan kombinatsiyalar ishlamasligi mumkin.
 - **Legacy:** `scripts/build.sh` alohida eski egui ilovasini yig‘adi, native Temada emas. Uning Live rejimida optional `.env` aliaslari `GEMINI_API_KEY`/`GOOGLE_API_KEY` (64 KiB, shell ishlatmaydi). Eksperimental CLI rejimi 4 s vaqtinchalik WAV ishlatadi, realtime emas; Gemini/Codex/AGY obunasi orqali audio ishlashi tasdiqlanmagan, crash’da temp fayl qolishi mumkin. Native ilova bu yo‘lga yashirin o‘tmaydi.
 
 ### Tekshirish va holat

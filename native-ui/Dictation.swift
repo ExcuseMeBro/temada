@@ -32,6 +32,8 @@ struct DictationBuffer {
 }
 @MainActor final class EnglishDictation: ObservableObject {
     @Published private(set) var armed = false
+    @Published private(set) var testingShortcut = false
+    private var shortcutTestID: UUID?
     @Published private(set) var active = false
     @Published private(set) var status = "Off — enable for this launch after cloud/microphone/Accessibility consent."
     @Published private(set) var draft = ""
@@ -42,8 +44,9 @@ struct DictationBuffer {
     private let hotkey: any HotkeyRegistering
     private let signed: () -> Bool
     private let trusted: () -> Bool
-    init(defaults: UserDefaults = .standard, hotkey: (any HotkeyRegistering)? = nil, signed: @escaping () -> Bool = { AppIdentity.certificateSigned }, trusted: @escaping () -> Bool = { AXIsProcessTrusted() }) {
-        self.defaults = defaults; self.hotkey = hotkey ?? GlobalDictationHotkey(); self.signed = signed; self.trusted = trusted
+    private let conflict: (ShortcutBinding) -> String?
+    init(defaults: UserDefaults = .standard, hotkey: (any HotkeyRegistering)? = nil, signed: @escaping () -> Bool = { AppIdentity.certificateSigned }, trusted: @escaping () -> Bool = { AXIsProcessTrusted() }, conflict: @escaping (ShortcutBinding) -> String? = SystemShortcutConflict.reason(for:)) {
+        self.defaults = defaults; self.hotkey = hotkey ?? GlobalDictationHotkey(); self.signed = signed; self.trusted = trusted; self.conflict = conflict
         if let data = defaults.data(forKey: "dictation.shortcut.v1"), let saved = try? JSONDecoder().decode(ShortcutBinding.self, from: data), saved.valid { shortcut = saved }
         else { shortcut = .defaultBinding }
     }
@@ -70,15 +73,55 @@ struct DictationBuffer {
     }
     func arm(consent: Bool, credentialsValid: Bool, microphoneReady: Bool) {
         guard !active else { return }
-        hotkey.unregister(); armed = false
+        disarm()
         let needs = Self.missing(consent: consent, credentialsValid: credentialsValid, microphoneReady: microphoneReady, signed: signed(), trusted: trusted())
         guard needs.isEmpty else { status = "Missing: " + needs.joined(separator: "; ") + ". Nothing registered or recorded."; return }
-        hotkey.triggered = { [weak self] in self?.onHotkey?() }
+        guard let problem = conflict(shortcut) else { registerDictation(); return }
+        status = problem + " Nothing registered or recorded."
+    }
+    private func registerDictation() {
+        hotkey.triggered = { [weak self] in guard let self, self.armed else { return }; self.onHotkey?() }
         let code = hotkey.register(shortcut)
         guard code == noErr else { hotkey.unregister(); status = "Cannot register \(shortcut.display) (macOS code \(code)). Another app or macOS may own it. Record a different shortcut; check Keyboard → Keyboard Shortcuts. No recording started."; return }
         armed = true; status = "Ready · focus a text caret, \(shortcut.display) to speak, again to finish."
     }
-    func disarm() { hotkey.unregister(); armed = false; cancel() }
+    func testShortcut() {
+        guard !active else { return }
+        disarm()
+        guard signed() else { status = "Use the certificate-signed Temada app to test. No audio recorded."; return }
+        if let problem = conflict(shortcut) { status = problem + " No audio recorded."; return }
+        let id = UUID()
+        hotkey.triggered = { [weak self] in
+            guard let self, self.testingShortcut, self.shortcutTestID == id else { return }
+            self.status = "Received \(self.shortcut.display) — shortcut works. No audio recorded. Stop test, check API key/consent/access, then Enable to dictate."
+        }
+        let code = hotkey.register(shortcut)
+        guard code == noErr else {
+            hotkey.unregister(); hotkey.triggered = nil
+            status = "Cannot test \(shortcut.display) (macOS code \(code)). Choose another shortcut or check Keyboard Shortcuts. No audio recorded."
+            return
+        }
+        shortcutTestID = id; testingShortcut = true
+        status = "Test only · focus any app and press \(shortcut.display). No microphone, API or text insertion. Test ends after 30s."
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in
+            self?.expireShortcutTest(id)
+        }
+    }
+    func expireShortcutTest(_ id: UUID) {
+        guard testingShortcut, shortcutTestID == id else { return }
+        stopShortcutTest()
+    }
+    func stopShortcutTest() {
+        guard testingShortcut else { return }
+        disarm(); status = "Shortcut test stopped. Enable dictation separately; nothing was recorded."
+    }
+    func unavailable(_ reason: String) {
+        disarm(); status = reason + " Nothing recorded."
+    }
+    func disarm() {
+        hotkey.unregister(); hotkey.triggered = nil; armed = false
+        testingShortcut = false; shortcutTestID = nil; cancel()
+    }
     func begin() -> Bool {
         guard armed, !active else { return false }
         do { cursor = try FocusedCursor.capture() }
