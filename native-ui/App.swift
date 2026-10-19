@@ -79,11 +79,7 @@ import Combine
         statusItem.menu = menu
     }
     private func menuImage(running: Bool) -> NSImage? {
-        guard let logo = NSImage(named: NSImage.Name("Temada")) else { return NSImage(systemSymbolName: running ? "captions.bubble.fill" : "captions.bubble", accessibilityDescription: "Temada") }
-        let image = NSImage(size: NSSize(width: 20, height: 20))
-        image.lockFocus(); logo.draw(in: NSRect(x: 0, y: 0, width: 20, height: 20))
-        if running { NSColor.systemGreen.setFill(); NSBezierPath(ovalIn: NSRect(x: 15, y: 0, width: 5, height: 5)).fill() }
-        image.unlockFocus(); return image
+        StatusIcon.image(running: running)
     }
     private func item(_ title: String, _ action: Selector, key: String) -> NSMenuItem {
         let value = NSMenuItem(title: title, action: action, keyEquivalent: key); value.target = self; return value
