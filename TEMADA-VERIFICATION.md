@@ -1,5 +1,21 @@
 # Temada 0.4.0 / build 3 — candidate evidence
 
+## Latest refinement: compact tray menu
+
+User requested removal of the long provider status that widened the context menu.
+Removed the disabled status menu item, its subscription and leading separator.
+Full worker status/errors/cloud-cost disclosure remain in Settings; no permission
+or consent gates removed. Native source absence/preserved-Settings checks,
+`scripts/test-native.sh`, release build, embedded tests, strict/deep certificate
+and runtime brand/identity checks PASS. Newest candidate:
+`macos-live/dist/Temada-0.4.0-compact-menu.app` (NOT installed/launched).
+Logs: /tmp/brain-1-temada-menu-native-tests.log,
+/tmp/brain-1-temada-menu-build.log. Earlier evidence below is historical; the
+compact-menu candidate supersedes the prior verified candidate for this UI change.
+Installed MCLBB untouched; permission to quit/update it is still outstanding.
+
+## Meeting files and branding evidence
+
 2026-10-19, BRAIN-1; same task-owned BRAIN-1-macos-live worktree.
 User scope: meeting files + Temada name/logo; written transcripts/translations,
 not raw audio recording. Existing P0–P5 criteria remain unchanged/open.

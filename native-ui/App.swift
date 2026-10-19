@@ -13,7 +13,6 @@ import Combine
     private var overlay: NSPanel!
     private var settings: NSWindow?
     private var startItem: NSMenuItem!
-    private var statusMenuItem: NSMenuItem!
     private var observers = Set<AnyCancellable>()
     private var applyingFrame = false
     private var pendingQuit = false
@@ -39,7 +38,6 @@ import Combine
             self?.statusItem.button?.image = self?.menuImage(running: running)
             self?.statusItem.button?.toolTip = running ? "Temada · Captions running" : "Temada"
         }.store(in: &observers)
-        worker.$status.sink { [weak self] message in self?.statusMenuItem.title = String(message.prefix(90)) }.store(in: &observers)
         meetingFiles.onFailure = { [weak self] in self?.worker.fail("Meeting file write failed. Partial files retained.") }
         worker.onFrames = { [weak self] frames in
             guard let self else { return }
@@ -60,8 +58,7 @@ import Combine
         statusItem.button?.image = menuImage(running: false)
         statusItem.button?.toolTip = "Temada"
         let menu = NSMenu()
-        statusMenuItem = NSMenuItem(title: "Ready", action: nil, keyEquivalent: ""); statusMenuItem.isEnabled = false; menu.addItem(statusMenuItem)
-        menu.addItem(.separator())
+        // Dynamic provider status belongs in Settings, not the menu's width.
         startItem = item("Start captions…", #selector(toggleCapture), key: "s"); menu.addItem(startItem)
         menu.addItem(item("Show / hide subtitles", #selector(toggleOverlay), key: "h"))
         menu.addItem(item("Clear text", #selector(clearText), key: "k"))
