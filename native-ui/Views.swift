@@ -102,19 +102,25 @@ struct NativeSettings: View {
                         Toggle("I consent to cloud audio processing and possible API charges", isOn: $consent)
                     }.padding(8)
                 }.disabled(worker.running)
-                GroupBox("Uzbek → English at your cursor · ⌘Space") {
+                GroupBox("Uzbek → English at your cursor · \(dictation.shortcut.display)") {
                     VStack(alignment: .leading, spacing: 10) {
-                        Text("Enable for this launch, focus an editable text caret, press ⌘Space and speak Uzbek. Press ⌘Space again to finish. Google processes microphone audio (API charges); 60s recording / 15s final-turn limit. No Send/Return event. Same English translation model, not a guarantee of perfect wording.").font(.caption)
+                        Text("Enable for this launch, focus an editable text caret, press \(dictation.shortcut.display) and speak Uzbek. Press it again to finish. Google processes microphone audio (API charges); 60s recording / 15s final-turn limit. No Send/Return event. Same English translation model, not a guarantee of perfect wording.").font(.caption)
+                        ShortcutRecorder(binding: dictation.shortcut, began: dictation.prepareShortcutRecording, changed: dictation.setShortcut)
+                            .frame(height: 30).disabled(worker.running || dictation.active)
+                        Text("Click Record shortcut, then press your combination. Use ⌘ / ⌃ / ⌥ + a key, or F1–F20 (Fn may be needed). Escape cancels. Saved across launches; enabling is still required each launch. macOS/other apps can reserve combinations; Temada never changes system shortcuts automatically.").font(.caption).foregroundStyle(.secondary)
                         HStack {
                             Button("Microphone access") { permissions.request(source: "microphone") }.disabled(worker.running)
                             Button("Accessibility access", action: dictation.requestAccessibility).disabled(worker.running)
-                            Button("Check access", action: permissions.refresh).disabled(worker.running)
+                            Button("Check access") {
+                                permissions.refresh()
+                                dictation.checkAccess(consent: consent, credentialsValid: credentials.valid, microphoneReady: permissions.microphoneGranted)
+                            }.disabled(worker.running)
                         }
                         HStack {
-                            Button(dictation.armed ? "Disable ⌘Space" : "Enable ⌘Space") {
+                            Button(dictation.armed ? "Disable \(dictation.shortcut.display)" : "Enable \(dictation.shortcut.display)") {
                                 if dictation.armed { dictation.disarm() }
                                 else { dictation.arm(consent: consent, credentialsValid: credentials.valid, microphoneReady: permissions.microphoneGranted) }
-                            }.disabled(!dictation.armed && (worker.running || meetingFiles.busy || !consent || !credentials.valid))
+                            }.disabled(!dictation.armed && (worker.running || meetingFiles.busy))
                             Button("Cancel dictation") { dictation.cancel() }.disabled(!dictation.active)
                             Button("Copy English draft") { dictation.copyDraft(to: .general) }.disabled(dictation.draft.isEmpty)
                         }

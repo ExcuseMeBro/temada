@@ -2,8 +2,9 @@ import AppKit
 
 @MainActor enum DictationTests {
     static func run() {
-        precondition(CommandSpaceHotkey.accepts(signature: 0x544D4441, id: 1))
-        precondition(!CommandSpaceHotkey.accepts(signature: 0, id: 1) && !CommandSpaceHotkey.accepts(signature: 0x544D4441, id: 2))
+        ShortcutTests.run()
+        precondition(GlobalDictationHotkey.accepts(signature: 0x544D4441, id: 1))
+        precondition(!GlobalDictationHotkey.accepts(signature: 0, id: 1) && !GlobalDictationHotkey.accepts(signature: 0x544D4441, id: 2))
         var buffer = DictationBuffer()
         try! buffer.consume([NativeTests.frame(nil, "ignored", source: "microphone")])
         precondition(buffer.translation.isEmpty && !buffer.active)

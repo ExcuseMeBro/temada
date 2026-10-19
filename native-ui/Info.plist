@@ -7,8 +7,8 @@
 <key>CFBundleIconFile</key><string>Temada</string>
 <key>CFBundleExecutable</key><string>meeting-captions-native</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleVersion</key><string>7</string>
-<key>CFBundleShortVersionString</key><string>0.5.2</string>
+<key>CFBundleVersion</key><string>8</string>
+<key>CFBundleShortVersionString</key><string>0.5.3</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>LSUIElement</key><true/>
 <key>NSMicrophoneUsageDescription</key><string>Temada captures microphone audio for live captions and translation only after cloud consent and Start.</string>

@@ -120,14 +120,27 @@ window interactions, device capture, semantic translation alignment or smoothnes
 Live native UI/Meet/Zoom/TCC checks and comparable CPU/memory/frame-time measurements
 remain manual acceptance; native technology alone is not a performance guarantee.
 
-## Uzbek speech → English at the cursor (native Temada 0.5.0)
+## Uzbek speech → English at the cursor (native Temada 0.5.3)
 
-Settings → **Uzbek → English at your cursor · ⌘Space**. Enter an API key, give
-fresh cloud/cost consent, grant Microphone and Accessibility explicitly, then
-**Enable ⌘Space** for this launch only. Registration fails visibly if another
-shortcut owns the combination; the app never edits Spotlight settings itself.
-Focus an editable text caret in another app, press ⌘Space, **wait for the microphone
-indicator/Listening status**, speak Uzbek, then press ⌘Space again to finish.
+Settings → **Uzbek → English at your cursor** → **Record shortcut…**, then press
+an available combination: Command/Control/Option + a key, or F1–F20 (possibly Fn).
+Escape cancels; ordinary typing/Shift-only letters and modifier-only bindings are
+rejected to avoid capturing normal typing. Default is **⇧⌘Space**, not Spotlight's
+⌘Space. The chosen physical keycode/modifiers and display label persist locally;
+arming/cloud consent never persist. Keyboard-layout changes may change its label.
+The recorder temporarily consumes only Temada's own focused recording-button events,
+including menu equivalents; no global keyboard monitor or Input Monitoring access.
+Recording/changing a binding disarms it; it never starts the microphone.
+
+Enter an API key, give fresh cloud/cost consent, grant Microphone and Accessibility
+explicitly, then **Enable [your shortcut]** for this launch only. **Check access**
+lists specifically missing prerequisites but does not silently enable it. Failed
+registration shows the combination and raw macOS error code; choose another key
+or check macOS Keyboard Shortcuts. OS-reserved keys may never reach the recorder;
+not every combination is bindable. Temada never changes system shortcuts itself.
+Focus an editable text caret in another app, press your shortcut, **wait for the
+microphone indicator/Listening status**, speak Uzbek, then press it again to finish.
+Holding the key cannot repeatedly toggle recording: another press needs release.
 Connection setup can delay recording; no measured latency or perfect-English claim.
 
 Uses the same Gemini Live Translate model, English target, microphone only; no
@@ -143,7 +156,7 @@ Meeting capture and dictation cannot run simultaneously. No automatic retry/fall
 
 Insertion uses AXSelectedText at the captured, still-focused caret: same app,
 AX element, role and selection range, editable zero-length selection only. It does
-not read field contents, monitor keystrokes, replace an entire field, synthesize
+not read field contents, globally monitor keystrokes, replace an entire field, synthesize
 Paste/Return events or automatically touch the clipboard. Known terminal apps,
 password/protected fields, changed focus/caret, unknown/unsupported apps and
 multiline/control-character drafts are rejected. Application AX support varies;
@@ -157,7 +170,7 @@ stream, and are NOT included in meeting files or caption scrollback. API audio a
 generated-audio charges still apply, even though output audio is discarded. Granting
 Accessibility/arming alone starts no capture or network connection. Nothing starts
 until a manual hotkey press. Actual account/model manual-activity support, TCC,
-⌘Space routing, microphone quality, real target-app insertion and latency remain
+physical global shortcut routing/conflicts, microphone quality, real target-app insertion and latency remain
 manual acceptance; unit/mock tests are not proof of these.
 
 ## Meeting files (native Temada)

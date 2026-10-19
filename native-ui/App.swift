@@ -38,7 +38,7 @@ import Combine
         worker.$running.sink { [weak self] running in
             self?.startItem.title = running ? (self?.dictation.active == true ? "Cancel dictation" : "Stop captions") : "Start captions…"
             self?.statusItem.button?.image = self?.menuImage(running: running)
-            self?.statusItem.button?.toolTip = running ? (self?.dictation.active == true ? "Temada · English dictation · ⌘Space to finish" : "Temada · Captions running") : "Temada"
+            self?.statusItem.button?.toolTip = running ? (self?.dictation.active == true ? "Temada · English dictation · \(self?.dictation.shortcut.display ?? "shortcut") to finish" : "Temada · Captions running") : "Temada"
         }.store(in: &observers)
         dictation.onHotkey = { [weak self] in self?.toggleDictation() }
         dictation.onCancel = { [weak self] in self?.worker.stop() }
