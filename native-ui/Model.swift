@@ -2,17 +2,18 @@ import Foundation
 import Combine
 
 struct Appearance: Codable, Equatable {
-    var originalSize = 21.0
-    var translationSize = 27.0
+    var originalSize = 17.0
+    var translationSize = 20.0
     var originalColor = "#F2F4F8"
     var translationColor = "#82E8C1"
     var backgroundColor = "#11151C"
     var opacity = 0.86
-    var width = 820.0
-    var height = 330.0
+    var width = 620.0
+    var height = 190.0
     var x: Double?
     var y: Double?
-    var visiblePairs = 4
+    var visiblePairs = 1
+    var compactText = true
     var animations = true
     var saveMeetings = true
     var meetingFolder = (FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")).appendingPathComponent("Temada/Meetings").path
@@ -20,8 +21,8 @@ struct Appearance: Codable, Equatable {
     var target = "uz"
     mutating func clamp() {
         func valid(_ n: Double, _ range: ClosedRange<Double>, _ fallback: Double) -> Double { n.isFinite ? min(max(n, range.lowerBound), range.upperBound) : fallback }
-        originalSize = valid(originalSize, 12...64, 21); translationSize = valid(translationSize, 12...72, 27)
-        width = valid(width, 340...1800, 820); height = valid(height, 140...1200, 330)
+        originalSize = valid(originalSize, 12...64, 17); translationSize = valid(translationSize, 12...72, 20)
+        width = valid(width, 340...1800, 620); height = valid(height, 140...1200, 190)
         opacity = valid(opacity, 0.1...1, 0.86); visiblePairs = min(max(visiblePairs, 1), 12)
         for color in [originalColor, translationColor, backgroundColor] {
             if !Self.isColor(color) { originalColor = "#F2F4F8"; translationColor = "#82E8C1"; backgroundColor = "#11151C"; break }
@@ -35,6 +36,12 @@ struct Appearance: Codable, Equatable {
 @MainActor final class Preferences: ObservableObject {
     let defaults: UserDefaults
     @Published var appearance: Appearance { didSet { if let data = try? JSONEncoder().encode(appearance) { defaults.set(data, forKey: "appearance.v1") } } }
+    func useCompactLayout() {
+        var value = appearance
+        value.originalSize = 17; value.translationSize = 20
+        value.width = 620; value.height = 190; value.visiblePairs = 1; value.compactText = true
+        appearance = value
+    }
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         // Merge newly added defaults without discarding an older saved appearance.

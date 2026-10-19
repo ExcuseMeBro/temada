@@ -61,6 +61,7 @@ import Combine
         // Dynamic provider status belongs in Settings, not the menu's width.
         startItem = item("Start captions…", #selector(toggleCapture), key: "s"); menu.addItem(startItem)
         menu.addItem(item("Show / hide subtitles", #selector(toggleOverlay), key: "h"))
+        menu.addItem(item("Compact overlay", #selector(compactOverlay), key: ""))
         menu.addItem(item("Clear text", #selector(clearText), key: "k"))
         menu.addItem(item("Settings…", #selector(showSettings), key: ","))
         menu.addItem(item("Show last meeting files", #selector(showMeetingFiles), key: "m"))
@@ -89,6 +90,7 @@ import Combine
         NSApp.activate(ignoringOtherApps: true); settings?.makeKeyAndOrderFront(nil)
     }
     @objc func toggleOverlay() { if overlay.isVisible { overlay.orderOut(nil) } else { overlay.orderFrontRegardless() } }
+    @objc func compactOverlay() { preferences.useCompactLayout(); overlay.orderFrontRegardless() }
     @objc func clearText() { if !worker.running { captions.clear() } }
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool { menuItem.action != #selector(clearText) || !worker.running }
     @objc func toggleCapture() { if worker.running { worker.stop() } else { showSettings() } }

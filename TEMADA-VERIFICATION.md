@@ -1,6 +1,34 @@
 # Temada 0.4.0 / build 3 — candidate evidence
 
-## Latest refinement: compact tray menu
+## Latest candidate: compact subtitle overlay
+
+User requested a smaller subtitle panel, not just a narrower tray menu.
+Default/preset: 620×190 points, original 17pt / translation 20pt, one pair,
+12pt padding and tighter spacing. Compact text displays only the latest row,
+up to 2 original and 3 translation lines, with ellipsis for overflow. Presentation
+only: full model/journal text is not shortened. Disable compact text to view
+expanded history. No semantic alignment/translation-quality claims added.
+
+Existing saved font/window preferences are deliberately retained. To apply the
+smaller geometry to an existing installation, choose tray **Compact overlay**
+or Settings → Appearance → **Compact layout**. This changes layout only;
+colors, position, audio source/target, consent, and meeting-saving choices remain.
+Dragging/resizing remain available; choosing another size is still allowed.
+
+`scripts/test-native.sh` and release build with embedded tests PASS, including
+long EN/RU/UZ text, 620×190 hidden panel geometry, model preservation, compact
+preference roundtrip, old-preferences merge, eight-edge interactions, permissions,
+credentials, full meeting files and EOF drain gates. Certificate/brand checks
+and strict/deep signing verification PASS. Complete source diff self-reviewed;
+Rust/audio/network paths unchanged and prior evidence remains applicable.
+Newest candidate: `macos-live/dist/Temada-0.4.0-compact-overlay.app`.
+Logs: /tmp/brain-1-temada-compact-overlay-tests.log,
+/tmp/brain-1-temada-compact-overlay-build.log.
+NOT installed/launched. Installed MCLBB was not stopped or modified. Physical UI,
+actual recording and final user acceptance remain pending. Prior candidates below
+are historical; this bundle includes the compact tray refinement as well.
+
+## Earlier refinement: compact tray menu
 
 User requested removal of the long provider status that widened the context menu.
 Removed the disabled status menu item, its subscription and leading separator.

@@ -17,18 +17,21 @@ struct CaptionOverlay: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
         let a = preferences.appearance
-        let rows = Array(captions.rows.suffix(a.visiblePairs))
+        let rows = Array(captions.rows.suffix(a.compactText ? 1 : a.visiblePairs))
         let animation: Animation? = a.animations && !reduceMotion ? .easeOut(duration: 0.18) : nil
         // Deliberately NO controls, status, source headers or placeholders here.
         ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 17) {
+                VStack(alignment: .leading, spacing: 8) {
                     ForEach(rows) { pair in
-                        VStack(alignment: .leading, spacing: 5) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            // Clip presentation only: full text stays in model/journal.
                             Text(pair.original).font(.system(size: a.originalSize, weight: .regular)).foregroundStyle(Color(hex: a.originalColor))
+                                .lineLimit(a.compactText ? 2 : nil).truncationMode(.head)
                                 .fixedSize(horizontal: false, vertical: true)
                             if !pair.translation.isEmpty {
                                 Text(pair.translation).font(.system(size: a.translationSize, weight: .medium)).foregroundStyle(Color(hex: a.translationColor))
+                                    .lineLimit(a.compactText ? 3 : nil).truncationMode(.head)
                                     .fixedSize(horizontal: false, vertical: true)
                             }
                         }
@@ -38,7 +41,7 @@ struct CaptionOverlay: View {
                         .accessibilityElement(children: .combine)
                     }
                 }
-                .padding(20)
+                .padding(12)
                 .animation(animation, value: rows.map(\.id))
             }
             .onChange(of: captions.rows) { _, rows in
@@ -145,6 +148,13 @@ struct NativeSettings: View {
                 Text(worker.status).font(.callout).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
                 GroupBox("Appearance — saved automatically") {
                     VStack(spacing: 14) {
+                        HStack {
+                            Button("Compact layout") { preferences.useCompactLayout() }
+                            Text("620 × 190 · 17/20 pt · one caption pair").font(.caption).foregroundStyle(.secondary)
+                            Spacer()
+                        }
+                        Toggle("Compact text: latest pair, 2 original + 3 translation lines", isOn: $preferences.appearance.compactText)
+                        Text("Display only. Full transcripts and translations are kept in meeting files when saving is on. Turn compact text off for expanded history.").font(.caption).foregroundStyle(.secondary)
                         sizeSlider("Original", value: $preferences.appearance.originalSize, range: 12...64)
                         sizeSlider("Translation", value: $preferences.appearance.translationSize, range: 12...72)
                         HStack {
@@ -155,7 +165,7 @@ struct NativeSettings: View {
                         sizeSlider("Background opacity", value: $preferences.appearance.opacity, range: 0.1...1, percentage: true)
                         sizeSlider("Window width", value: $preferences.appearance.width, range: 340...1800)
                         sizeSlider("Window height", value: $preferences.appearance.height, range: 140...1200)
-                        Stepper("Visible pairs: \(preferences.appearance.visiblePairs)", value: $preferences.appearance.visiblePairs, in: 1...12)
+                        Stepper("Visible pairs: \(preferences.appearance.visiblePairs)", value: $preferences.appearance.visiblePairs, in: 1...12).disabled(preferences.appearance.compactText)
                         Toggle("Smooth transitions (respects Reduce Motion)", isOn: $preferences.appearance.animations)
                         Text("Drag anywhere on the overlay, including text. Resize any edge or corner, or use the sliders. Position and size are saved. Overlay contains only original text and translation.")
                             .font(.caption).foregroundStyle(.secondary)
