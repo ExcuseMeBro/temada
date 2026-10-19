@@ -6,6 +6,7 @@ import AppKit
         WireFrame(kind: "text", source: source, original: original, translation: translation, inputFinished: inputDone, outputFinished: outputDone)
     }
     static func run() {
+        PermissionTests.run()
         var t = CaptionTimeline()
         try! t.consume(frame("Hello. Next.", "Salom. Keyingi.", inputDone: true, outputDone: true))
         precondition(t.pairs.count == 2 && t.pairs[0].original == "Hello." && t.pairs[0].translation == "Salom.")

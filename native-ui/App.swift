@@ -6,6 +6,7 @@ import Combine
     let preferences = Preferences()
     let captions = Captions()
     let worker = StreamingWorker()
+    let permissions = RecordingPermissions()
     private var statusItem: NSStatusItem!
     private var overlay: NSPanel!
     private var settings: NSWindow?
@@ -19,7 +20,7 @@ import Combine
         let args = CommandLine.arguments
         if let index = args.firstIndex(of: "--env-file"), args.indices.contains(index + 1) { preferences.appearance.envPath = args[index + 1] }
         overlay = CaptionPanel(contentRect: NSRect(x: 0, y: 0, width: preferences.appearance.width, height: preferences.appearance.height), styleMask: [.borderless, .resizable, .nonactivatingPanel], backing: .buffered, defer: false)
-        overlay.title = "Meeting Captions Native — subtitles"
+        overlay.title = "MCLBB — subtitles"
         overlay.isReleasedWhenClosed = false; overlay.level = .floating
         overlay.isOpaque = false; overlay.backgroundColor = .clear; overlay.hasShadow = true
         overlay.isMovableByWindowBackground = true; overlay.hidesOnDeactivate = false
@@ -35,7 +36,7 @@ import Combine
         preferences.$appearance.debounce(for: .milliseconds(60), scheduler: RunLoop.main).sink { [weak self] value in self?.applyFrame(value, restorePosition: false) }.store(in: &observers)
         worker.$running.sink { [weak self] running in
             self?.startItem.title = running ? "Stop captions" : "Start captions…"
-            self?.statusItem.button?.image = NSImage(systemSymbolName: running ? "captions.bubble.fill" : "captions.bubble", accessibilityDescription: running ? "Captions streaming" : "Meeting Captions")
+            self?.statusItem.button?.image = NSImage(systemSymbolName: running ? "captions.bubble.fill" : "captions.bubble", accessibilityDescription: running ? "MCLBB streaming" : "MCLBB")
         }.store(in: &observers)
         worker.$status.sink { [weak self] message in self?.statusMenuItem.title = String(message.prefix(90)) }.store(in: &observers)
         worker.onFrames = { [weak self] frames in
@@ -52,7 +53,7 @@ import Combine
     }
     private func createMenu() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        statusItem.button?.image = NSImage(systemSymbolName: "captions.bubble", accessibilityDescription: "Meeting Captions")
+        statusItem.button?.image = NSImage(systemSymbolName: "captions.bubble", accessibilityDescription: "MCLBB")
         let menu = NSMenu()
         statusMenuItem = NSMenuItem(title: "Ready", action: nil, keyEquivalent: ""); statusMenuItem.isEnabled = false; menu.addItem(statusMenuItem)
         menu.addItem(.separator())
@@ -60,7 +61,7 @@ import Combine
         menu.addItem(item("Show / hide subtitles", #selector(toggleOverlay), key: "h"))
         menu.addItem(item("Clear text", #selector(clearText), key: "k"))
         menu.addItem(item("Settings…", #selector(showSettings), key: ","))
-        menu.addItem(.separator()); menu.addItem(item("Quit Meeting Captions Native", #selector(quit), key: "q"))
+        menu.addItem(.separator()); menu.addItem(item("Quit MCLBB", #selector(quit), key: "q"))
         statusItem.menu = menu
     }
     private func item(_ title: String, _ action: Selector, key: String) -> NSMenuItem {
@@ -68,10 +69,10 @@ import Combine
     }
     @objc func showSettings() {
         if settings == nil {
-            let view = NativeSettings(preferences: preferences, worker: worker,
+            let view = NativeSettings(preferences: preferences, worker: worker, permissions: permissions,
                 toggleOverlay: { [weak self] in self?.toggleOverlay() }, clear: { [weak self] in self?.clearText() }, start: { [weak self] consent in self?.startCapture(consent: consent) })
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 700, height: 760), styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
-            window.title = "Meeting Captions Native — Settings"; window.isReleasedWhenClosed = false
+            window.title = "MCLBB — Settings"; window.isReleasedWhenClosed = false
             window.contentView = NSHostingView(rootView: view); window.center(); settings = window
         }
         NSApp.activate(ignoringOtherApps: true); settings?.makeKeyAndOrderFront(nil)
@@ -82,6 +83,8 @@ import Combine
     @objc func toggleCapture() { if worker.running { worker.stop() } else { showSettings() } }
     private func startCapture(consent: Bool) {
         guard consent, !worker.running else { return }
+        permissions.refresh()
+        guard permissions.canStart(source: preferences.appearance.source) else { showSettings(); return }
         captions.clear(); overlay.orderFrontRegardless()
         worker.start(appearance: preferences.appearance, consent: consent)
         if worker.running { settings?.orderOut(nil) }
@@ -128,6 +131,10 @@ import Combine
 @main struct NativeMain {
     @MainActor static func main() {
         if CommandLine.arguments.contains("--self-test") { NativeTests.run(); return }
+        if CommandLine.arguments.contains("--verify-identity") {
+            guard AppIdentity.certificateSigned else { fputs("IDENTITY: FAIL — signed MCLBB bundle required\n", stderr); exit(1) }
+            print("IDENTITY: PASS — certificate-signed dev.bro.mclbb"); return
+        }
         let app = NSApplication.shared
         let delegate = NativeDelegate(); app.delegate = delegate
         withExtendedLifetime(delegate) { app.run() }

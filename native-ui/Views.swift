@@ -58,6 +58,7 @@ struct CaptionOverlay: View {
 struct NativeSettings: View {
     @ObservedObject var preferences: Preferences
     @ObservedObject var worker: StreamingWorker
+    @ObservedObject var permissions: RecordingPermissions
     @State private var consent = false
     var toggleOverlay: () -> Void
     var clear: () -> Void
@@ -68,9 +69,35 @@ struct NativeSettings: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                Text("Meeting Captions").font(.largeTitle.bold())
-                Text("Native overlay · EN / RU / UZ").foregroundStyle(.secondary)
-                GroupBox("Audio & Gemini Live") {
+                HStack(spacing: 16) {
+                    Image(systemName: "captions.bubble.fill")
+                        .font(.system(size: 32, weight: .semibold)).foregroundStyle(.mint)
+                        .frame(width: 64, height: 64)
+                        .background(.mint.opacity(0.12), in: RoundedRectangle(cornerRadius: 18))
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("MCLBB").font(.system(size: 32, weight: .bold, design: .rounded))
+                        Text("Meeting Captions · Language Barrier Breaker").font(.subheadline).foregroundStyle(.secondary)
+                        Text("Understand every meeting.   EN / RU / UZ").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }
+                GroupBox("1 · macOS access") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(spacing: 20) {
+                            Label(permissions.screenGranted ? "System audio · Ready" : "System audio · Needs access", systemImage: permissions.screenGranted ? "checkmark.shield.fill" : "lock.shield")
+                            Label(permissions.microphoneGranted ? "Microphone · Ready" : "Microphone · Needs access", systemImage: permissions.microphoneGranted ? "checkmark.circle.fill" : "mic.slash")
+                        }.font(.callout)
+                        HStack {
+                            Button(permissions.requesting ? "Waiting for macOS…" : "Request access") { permissions.request(source: preferences.appearance.source) }
+                                .disabled(permissions.requesting || !permissions.certificateSigned)
+                            Button("Privacy Settings") { permissions.openSettings(source: preferences.appearance.source) }
+                            Button("Check again") { permissions.refresh() }
+                        }
+                        Text(permissions.canStart(source: preferences.appearance.source) ? "Required macOS access is ready. No recording until cloud consent and Start." : (permissions.message.isEmpty ? "Only the selected audio source needs access. Requesting permission does not record or send audio." : permissions.message))
+                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }.padding(8).frame(maxWidth: .infinity, alignment: .leading)
+                }.disabled(worker.running)
+                GroupBox("2 · Audio & Gemini Live") {
                     VStack(alignment: .leading, spacing: 12) {
                         HStack {
                             TextField("Existing .env file path", text: $preferences.appearance.envPath)
@@ -93,7 +120,7 @@ struct NativeSettings: View {
                 }.disabled(worker.running)
                 HStack {
                     Button(worker.running ? "Stop captions" : "Start captions") { if worker.running { worker.stop() } else { start(consent) } }
-                        .buttonStyle(.borderedProminent).disabled(!worker.running && !consent)
+                        .buttonStyle(.borderedProminent).disabled(!worker.running && (!consent || !permissions.canStart(source: preferences.appearance.source)))
                     Button("Show / hide overlay", action: toggleOverlay)
                     Button("Clear text", action: clear).disabled(worker.running)
                 }
@@ -122,8 +149,9 @@ struct NativeSettings: View {
         }
         .frame(minWidth: 640, minHeight: 560)
         .onChange(of: preferences.appearance.envPath) { _, _ in consent = false }
-        .onChange(of: preferences.appearance.source) { _, _ in consent = false }
+        .onChange(of: preferences.appearance.source) { _, _ in consent = false; permissions.refresh() }
         .onChange(of: preferences.appearance.target) { _, _ in consent = false }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in permissions.refresh() }
     }
     private func sizeSlider(_ title: String, value: Binding<Double>, range: ClosedRange<Double>, percentage: Bool = false) -> some View {
         HStack {

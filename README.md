@@ -1,4 +1,4 @@
-# Meeting Captions — macOS Rust streaming prototype (BRAIN-1)
+# MCLBB — Meeting Captions: Language Barrier Breaker (BRAIN-1)
 
 Rust/egui floating window; Swift ScreenCaptureKit/AVFoundation audio capture.
 **No downloaded models required.** Original transcript + EN/RU/UZ translation.
@@ -7,21 +7,31 @@ Existing Python/local routed STT and frozen P0–P5 criteria are unchanged.
 
 ## Native menu-bar UI (SwiftUI + AppKit)
 
-The new **Meeting Captions Native.app** is separate from the original app, with a
-separate bundle ID/preferences domain. It does NOT replace or stop the old app.
+**MCLBB.app** uses the stable `dev.bro.mclbb` bundle ID/preferences domain,
+separate from every legacy Meeting Captions / Native v2/v3/v4 app. It does NOT
+replace or stop them. MCLBB includes a locally drawn caption/translation icon.
 Rust retains the same model/audio/TLS backend; the native UI starts it in a private
 `--native-worker` JSON-lines mode (no egui window). No WebView or downloaded models.
 
 ```sh
 bash scripts/test-native.sh
+# Select an existing certificate with the user's approval; never export keys.
+export MC_CODESIGN_IDENTITY="YOUR_APPROVED_CERTIFICATE_40_HEX_SHA1"
+bash scripts/test-signing.sh  # local key use; user handles any Keychain prompt
 bash scripts/build-native.sh
-open "dist/Meeting Captions Native.app" --args --env-file /absolute/path/to/.env
+open "dist/MCLBB.app" --args --env-file /absolute/path/to/.env
 ```
 
 Build refuses an existing destination, including an app that might be running.
-To build again, choose a **new** absolute `MC_NATIVE_APP=/path/NewName.app` rather
-than overwriting/signing an active bundle. Only the script's private staging folder
-is removed. Existing `scripts/build.sh` still builds the OLD app; do not run it
+For a candidate build, choose a **new** absolute `MC_NATIVE_APP=/path/Candidate.app`
+rather than overwriting/signing an active bundle. Use the SAME approved certificate
+for subsequent builds. A stable installed path such as `~/Applications/MCLBB.app`
+should be replaced only after explicit Quit approval, ownership/idle checks and a
+private pre-change receipt/backup; this script never overwrites it. Only the
+script's private staging folder is removed. Signing refuses missing, ad-hoc or
+unknown identities; certificate keys and trust settings are never modified.
+`codesign --verify` alone proves integrity, not persistent TCC grants: the build
+also rejects cdhash-only requirements and verifies the signed bundle identity. Existing `scripts/build.sh` still builds the OLD app; do not run it
 against that app while it is active.
 
 - Menu-bar captions icon: Start/Stop, show/hide subtitles, Settings, Quit.
@@ -55,9 +65,18 @@ against that app while it is active.
 - Stop/Quit closes only the owned worker's input pipe. Rust cancels its own helpers
   and sockets. If graceful Quit is not confirmed within 8s, quitting is cancelled;
   there is no force-kill of an uncertain process or any other app/session.
-- Native app has a separate macOS privacy identity: grant recording permissions
-  after explicit Start. Stop capture in the original app yourself first, especially
-  in Both mode; the native app never closes another user's running application.
+- **First launch:** choose the audio source, click **Request access**, then enable
+  **MCLBB** in Privacy Settings (not an old Native v2 entry). Click **Check again**.
+  Both may need a second explicit request for Microphone after System audio is
+  granted. If macOS requires a restart, quit and reopen MCLBB yourself; permissions
+  are never reset or bypassed. Refresh/preflight never opens an OS prompt. Requests
+  are at most once per missing permission per run; denied/restricted Microphone
+  directs to Settings. Unsigned test builds cannot request access/start capture.
+  Start requires source-specific grants AND fresh cloud consent. No capture/network
+  occurs simply by granting permission or opening the app. macOS may still impose
+  its own periodic confirmation policy; this does not bypass it.
+  Stop capture in the old app yourself first, especially in Both mode; MCLBB never
+  closes another user's running application.
 
 Automated native tests use synthetic text and private temporary test preferences:
 SwiftUI/AppKit compilation, hidden AppKit panel sizing (empty captions must not
